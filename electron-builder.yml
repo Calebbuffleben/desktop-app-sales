@@ -1,0 +1,36 @@
+appId: com.meet.desktop
+productName: Meet Desktop
+artifactName: "${productName}-${version}-${os}-${arch}.${ext}"
+directories:
+  output: release
+  buildResources: build
+files:
+  - dist-electron/**
+  - out/**
+  - electron/preload.mjs
+  - config/**
+  - package.json
+extraMetadata:
+  main: dist-electron/electron/main.js
+asar: true
+# Generic update URL; override at release time. Placeholder avoids electron-builder env expand failure when unset.
+publish:
+  - provider: generic
+    url: "${env.AUTO_UPDATE_FEED_URL|https://localhost/meet-desktop-updates/}"
+mac:
+  target:
+    - dmg
+    - zip
+  category: public.app-category.business
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  extendInfo:
+    NSMicrophoneUsageDescription: Captura de microfone para análise de reuniões.
+win:
+  target:
+    - nsis
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true

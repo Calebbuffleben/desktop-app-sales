@@ -1,0 +1,72 @@
+import { contextBridge, ipcRenderer } from "electron";
+
+const ALLOWED_INVOKE_CHANNELS = new Set([
+  "desktop:get-state",
+  "desktop:capture-start",
+  "desktop:capture-stop",
+  "desktop:set-click-through",
+  "desktop:set-feedback-context",
+  "desktop:protocol-preview",
+  "desktop:protocol-validate",
+  "desktop:get-permission-policy",
+  "desktop:request-permission",
+  "desktop:update-check",
+  "desktop:update-download",
+  "desktop:update-install",
+]);
+
+const ALLOWED_LISTEN_CHANNELS = new Set([
+  "desktop:feedback-context-updated",
+  "desktop:anchor-mode-updated",
+  "desktop:update-status",
+]);
+
+function ensureObjectOrUndefined(value) {
+  if (value === undefined) return undefined;
+  if (value && typeof value === "object") return value;
+  throw new Error("IPC payload must be an object");
+}
+
+function invokeStrict(channel, payload) {
+  if (!ALLOWED_INVOKE_CHANNELS.has(channel)) {
+    throw new Error(`Blocked IPC invoke channel: ${channel}`);
+  }
+  return ipcRenderer.invoke(channel, ensureObjectOrUndefined(payload));
+}
+
+function onStrict(channel, handler) {
+  if (!ALLOWED_LISTEN_CHANNELS.has(channel)) {
+    throw new Error(`Blocked IPC listen channel: ${channel}`);
+  }
+  if (typeof handler !== "function") {
+    throw new Error("IPC handler must be a function");
+  }
+  const wrapped = (_event, payload) => handler(payload);
+  ipcRenderer.on(channel, wrapped);
+  return () => ipcRenderer.removeListener(channel, wrapped);
+}
+
+contextBridge.exposeInMainWorld(
+  "desktopApi",
+  Object.freeze({
+    getState: () => invokeStrict("desktop:get-state"),
+    startCapture: () => invokeStrict("desktop:capture-start"),
+    stopCapture: () => invokeStrict("desktop:capture-stop"),
+    setClickThrough: (enabled) =>
+      invokeStrict("desktop:set-click-through", { enabled: Boolean(enabled) }),
+    setFeedbackContext: (payload) =>
+      invokeStrict("desktop:set-feedback-context", ensureObjectOrUndefined(payload)),
+    protocolPreview: (payload) => invokeStrict("desktop:protocol-preview", payload),
+    protocolValidate: (payload) => invokeStrict("desktop:protocol-validate", payload),
+    getPermissionPolicy: () => invokeStrict("desktop:get-permission-policy"),
+    requestPermission: (kind) => invokeStrict("desktop:request-permission", { kind }),
+    checkForUpdates: () => invokeStrict("desktop:update-check"),
+    downloadUpdate: () => invokeStrict("desktop:update-download"),
+    installUpdateNow: () => invokeStrict("desktop:update-install"),
+    onFeedbackContextUpdated: (handler) =>
+      onStrict("desktop:feedback-context-updated", handler),
+    onAnchorModeUpdated: (handler) => onStrict("desktop:anchor-mode-updated", handler),
+    onUpdateStatus: (handler) => onStrict("desktop:update-status", handler),
+  }),
+);
+

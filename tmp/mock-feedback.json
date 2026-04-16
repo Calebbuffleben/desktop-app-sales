@@ -1,0 +1,42 @@
+{
+  "recent": [
+    {
+      "id": "feedback-test-1",
+      "meetingId": "abc-defg-hij",
+      "participantId": "browser",
+      "type": "llm_insight",
+      "severity": "warning",
+      "ts": "2026-04-16T14:12:00.000Z",
+      "message": "Teste visual do feedback no overlay.",
+      "metadata": {
+        "tips": ["Pergunte sobre timing", "Valide o budget"],
+        "spinPhase": "implicacao",
+        "spinRisk": true
+      }
+    },
+    {
+      "id": "feedback-test-2",
+      "meetingId": "abc-defg-hij",
+      "participantId": "browser",
+      "type": "llm_insight",
+      "severity": "critical",
+      "ts": "2026-04-16T14:12:10.000Z",
+      "message": "Segundo feedback para validar abertura do widget.",
+      "metadata": {
+        "tips": ["Confirme urgência", "Peça próximo passo"]
+      }
+    },
+    {
+      "id": "feedback-test-3",
+      "meetingId": "abc-defg-hij",
+      "participantId": "browser",
+      "type": "llm_insight",
+      "severity": "info",
+      "ts": "2026-04-16T14:13:20.000Z",
+      "message": "Terceiro feedback para validar abertura e fechamento do widget.",
+      "metadata": {
+        "tips": ["Peça o próximo passo"]
+      }
+    }
+  ]
+}
