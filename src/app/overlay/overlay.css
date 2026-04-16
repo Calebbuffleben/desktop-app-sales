@@ -4,3 +4,31 @@ html,
 body {
   background: transparent !important;
 }
+
+@keyframes overlay-tip-enter {
+  from {
+    opacity: 0;
+    transform: translateX(12px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+}
+
+.overlay-tip-enter {
+  animation: overlay-tip-enter 220ms ease-out both;
+}
+
+/* Screen-reader only (overlay route may not include all global Tailwind utilities). */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}

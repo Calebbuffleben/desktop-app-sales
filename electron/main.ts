@@ -129,23 +129,23 @@ function setOverlayWindowVisible(visible: boolean): void {
   }
 }
 
+const OVERLAY_WIDTH = 380;
+/** Tall enough for stacked tip toasts (see overlay/page.tsx). */
+const OVERLAY_HEIGHT = 520;
+
 function ensureOverlayPosition(): void {
   if (!overlayWindow || overlayWindow.isDestroyed()) return;
   const { workArea } = screen.getPrimaryDisplay();
-  const width = 380;
-  const height = 220;
-  const x = Math.round(workArea.x + workArea.width - width - 24);
+  const x = Math.round(workArea.x + workArea.width - OVERLAY_WIDTH - 24);
   const y = Math.round(workArea.y + 24);
-  overlayWindow.setBounds({ x, y, width, height });
+  overlayWindow.setBounds({ x, y, width: OVERLAY_WIDTH, height: OVERLAY_HEIGHT });
 }
 
 function positionOverlayFromAnchor(bounds: WindowBounds): void {
   if (!overlayWindow || overlayWindow.isDestroyed()) return;
-  const width = 380;
-  const height = 240;
-  const x = Math.round(bounds.x + bounds.width - width - 18);
+  const x = Math.round(bounds.x + bounds.width - OVERLAY_WIDTH - 18);
   const y = Math.round(bounds.y + 18);
-  overlayWindow.setBounds({ x, y, width, height });
+  overlayWindow.setBounds({ x, y, width: OVERLAY_WIDTH, height: OVERLAY_HEIGHT });
 }
 
 async function getMeetBoundsFromMacChrome(): Promise<WindowBounds | null> {
@@ -256,8 +256,8 @@ async function createWindows(): Promise<void> {
   });
 
   overlayWindow = new BrowserWindow({
-    width: 380,
-    height: 220,
+    width: OVERLAY_WIDTH,
+    height: OVERLAY_HEIGHT,
     show: false,
     frame: false,
     transparent: true,
