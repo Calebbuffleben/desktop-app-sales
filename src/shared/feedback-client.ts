@@ -210,7 +210,14 @@ export class DesktopFeedbackClient {
       this.stopPolling();
       if (Array.isArray(payload?.recent)) {
         for (const event of payload.recent) {
-          this.handleIncoming(normalizeRecentPayload(event));
+          const normalized = normalizeRecentPayload(event);
+          const eventId = normalized.id ? String(normalized.id) : "";
+          if (eventId) {
+            this.seenIds.add(eventId);
+          } else {
+            const key = `${String(normalized.ts || "")}|${normalized.type || ""}|${normalized.message || ""}`;
+            this.seenKeys.add(key);
+          }
         }
       }
     });

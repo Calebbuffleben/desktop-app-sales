@@ -93,6 +93,12 @@ export default function OverlayPage() {
 
   const isVisible = items.length > 0 && !isDismissed;
 
+  useEffect(() => {
+    const api = window.desktopApi;
+    if (!api?.setOverlayWindowVisible) return;
+    void api.setOverlayWindowVisible(isVisible);
+  }, [isVisible]);
+
   return (
     <div
       className={`flex h-screen w-screen items-start justify-end bg-transparent p-3 ${

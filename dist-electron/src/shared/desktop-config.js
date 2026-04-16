@@ -24,8 +24,8 @@ function parseNumber(value, fallback) {
     const parsed = Number(value);
     return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
-function readJsonConfigFile() {
-    const configFile = path.resolve(process.cwd(), "config/desktop-config.json");
+function readJsonConfigFile(baseDir) {
+    const configFile = path.resolve(baseDir, "config/desktop-config.json");
     if (!fs.existsSync(configFile))
         return {};
     try {
@@ -37,8 +37,9 @@ function readJsonConfigFile() {
         return {};
     }
 }
-export function loadDesktopConfig() {
-    const fromFile = readJsonConfigFile();
+export function loadDesktopConfig(options = {}) {
+    const baseDir = options.baseDir || process.cwd();
+    const fromFile = readJsonConfigFile(baseDir);
     return {
         BACKEND_WS_BASE: process.env.BACKEND_WS_BASE ??
             fromFile.BACKEND_WS_BASE ??

@@ -33,8 +33,17 @@ function parseNumber(value: string | undefined, fallback: number): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-function readJsonConfigFile(): Partial<DesktopConfig> {
-  const configFile = path.resolve(process.cwd(), "config/desktop-config.json");
+type LoadOptions = {
+  /**
+   * Base directory to resolve `config/desktop-config.json`.
+   * In Electron main process, pass `app.getAppPath()`; when packaged, `process.cwd()`
+   * usually points to `/` and the config file would be ignored.
+   */
+  baseDir?: string;
+};
+
+function readJsonConfigFile(baseDir: string): Partial<DesktopConfig> {
+  const configFile = path.resolve(baseDir, "config/desktop-config.json");
   if (!fs.existsSync(configFile)) return {};
   try {
     const raw = fs.readFileSync(configFile, "utf-8");
@@ -45,8 +54,9 @@ function readJsonConfigFile(): Partial<DesktopConfig> {
   }
 }
 
-export function loadDesktopConfig(): DesktopConfig {
-  const fromFile = readJsonConfigFile();
+export function loadDesktopConfig(options: LoadOptions = {}): DesktopConfig {
+  const baseDir = options.baseDir || process.cwd();
+  const fromFile = readJsonConfigFile(baseDir);
   return {
     BACKEND_WS_BASE:
       process.env.BACKEND_WS_BASE ??

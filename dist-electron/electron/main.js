@@ -1,5 +1,6 @@
 import path from "node:path";
 import fs from "node:fs";
+import os from "node:os";
 import * as electron from "electron";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -9,7 +10,7 @@ import { buildEgressAudioWsUrl, buildPcm16SilentFrame, getEgressDefaults, wsToHt
 import WebSocket from "ws";
 const { app, BrowserWindow, desktopCapturer, ipcMain, screen, session, shell, systemPreferences, } = electron;
 const { autoUpdater } = updater;
-const initialConfig = loadDesktopConfig();
+const initialConfig = loadDesktopConfig({ baseDir: app.getAppPath() });
 const appState = {
     captureStatus: "idle",
     clickThrough: false,
@@ -17,6 +18,7 @@ const appState = {
     meetingId: "abc-defg-hij",
     feedbackHttpBase: wsToHttpBase(initialConfig.BACKEND_WS_BASE),
     anchorMode: "fixed",
+    selectedSourceId: "",
     update: {
         status: "idle",
         message: "updater idle",
@@ -37,11 +39,21 @@ function isAllowedRendererUrl(target) {
     return target.startsWith("file://");
 }
 function addLog(message) {
-    const line = `${new Date().toISOString()} ${message}`;
+    const ts = Date.now();
+    const line = `${new Date(ts).toISOString()} ${message}`;
     appState.logs = [line, ...appState.logs].slice(0, 250);
     if (controlWindow && !controlWindow.isDestroyed()) {
         controlWindow.webContents.send("desktop:logs", appState.logs);
+        controlWindow.webContents.send("desktop:log-entry", { line, ts });
     }
+}
+function parseMacosMajor(release) {
+    const parts = release.split(".");
+    const kernelMajor = Number(parts[0]);
+    if (!Number.isFinite(kernelMajor))
+        return undefined;
+    const macosMajor = kernelMajor - 9;
+    return macosMajor > 0 ? macosMajor : undefined;
 }
 function broadcastUpdateState() {
     if (!controlWindow || controlWindow.isDestroyed())
@@ -68,6 +80,17 @@ function setOverlayAnchorMode(mode) {
         controlWindow.webContents.send("desktop:anchor-mode-updated", {
             anchorMode: appState.anchorMode,
         });
+    }
+}
+/** Hide the overlay BrowserWindow when there is nothing to show — transparent windows still reserve a compositor layer. */
+function setOverlayWindowVisible(visible) {
+    if (!overlayWindow || overlayWindow.isDestroyed())
+        return;
+    if (visible) {
+        overlayWindow.showInactive();
+    }
+    else {
+        overlayWindow.hide();
     }
 }
 function ensureOverlayPosition() {
@@ -183,7 +206,7 @@ function startOverlayAnchoring() {
     }, 1200);
 }
 async function createWindows() {
-    const preloadPath = path.join(app.getAppPath(), "electron/preload.mjs");
+    const preloadPath = path.join(app.getAppPath(), "electron/preload.cjs");
     controlWindow = new BrowserWindow({
         width: 980,
         height: 760,
@@ -202,6 +225,7 @@ async function createWindows() {
     overlayWindow = new BrowserWindow({
         width: 380,
         height: 220,
+        show: false,
         frame: false,
         transparent: true,
         alwaysOnTop: true,
@@ -260,7 +284,7 @@ async function createWindows() {
 }
 function registerIpcHandlers() {
     ipcMain.handle("desktop:get-state", () => {
-        const cfg = loadDesktopConfig();
+        const cfg = loadDesktopConfig({ baseDir: app.getAppPath() });
         return {
             captureStatus: appState.captureStatus,
             clickThrough: appState.clickThrough,
@@ -269,8 +293,114 @@ function registerIpcHandlers() {
             meetingId: appState.meetingId,
             feedbackHttpBase: appState.feedbackHttpBase,
             anchorMode: appState.anchorMode,
+            selectedSourceId: appState.selectedSourceId,
             update: appState.update,
         };
+    });
+    ipcMain.handle("desktop:check-capture-readiness", () => {
+        const platform = process.platform;
+        const microphoneStatus = typeof systemPreferences.getMediaAccessStatus === "function"
+            ? systemPreferences.getMediaAccessStatus("microphone")
+            : "unknown";
+        const screenStatus = typeof systemPreferences.getMediaAccessStatus === "function"
+            ? systemPreferences.getMediaAccessStatus("screen")
+            : "unknown";
+        const macosMajor = platform === "darwin" ? parseMacosMajor(os.release()) : undefined;
+        const missing = [];
+        const notes = [];
+        if (platform === "darwin") {
+            if (!macosMajor || macosMajor < 13) {
+                missing.push("macos-version");
+                notes.push(`macOS detectado: ${macosMajor ?? "?"}. Loopback nativo do Electron requer macOS 13+`);
+            }
+        }
+        if (microphoneStatus !== "granted") {
+            missing.push("microphone");
+            notes.push("Permissao de microfone necessaria para captura local.");
+        }
+        if (platform === "darwin" && screenStatus !== "granted") {
+            missing.push("screen");
+            notes.push("Permissao de Gravacao de Tela necessaria para captura loopback do Meet.");
+        }
+        return {
+            ok: missing.length === 0,
+            platform,
+            macosVersion: platform === "darwin" ? os.release() : undefined,
+            macosMajor,
+            microphoneStatus,
+            screenStatus,
+            missing,
+            notes,
+        };
+    });
+    ipcMain.handle("desktop:list-display-sources", async () => {
+        try {
+            const sources = await desktopCapturer.getSources({
+                types: ["window", "screen"],
+                thumbnailSize: { width: 320, height: 180 },
+                fetchWindowIcons: true,
+            });
+            const serialized = sources.map((source) => {
+                const name = source.name || "";
+                const lowered = name.toLowerCase();
+                const isWindow = source.id.startsWith("window:");
+                const appIcon = source.appIcon && typeof source.appIcon.toDataURL === "function"
+                    ? source.appIcon.toDataURL()
+                    : undefined;
+                return {
+                    id: source.id,
+                    name,
+                    display_id: source.display_id,
+                    thumbnailDataUrl: source.thumbnail && typeof source.thumbnail.toDataURL === "function"
+                        ? source.thumbnail.toDataURL()
+                        : undefined,
+                    iconDataUrl: appIcon,
+                    appIconDataUrl: appIcon,
+                    isMeet: lowered.includes("meet") || lowered.includes("google meet"),
+                    isChrome: lowered.includes("chrome") ||
+                        lowered.includes("chromium") ||
+                        lowered.includes("brave") ||
+                        lowered.includes("arc"),
+                    kind: (isWindow ? "window" : "screen"),
+                };
+            });
+            serialized.sort((a, b) => {
+                if (a.isMeet && !b.isMeet)
+                    return -1;
+                if (!a.isMeet && b.isMeet)
+                    return 1;
+                if (a.isChrome && !b.isChrome)
+                    return -1;
+                if (!a.isChrome && b.isChrome)
+                    return 1;
+                return a.name.localeCompare(b.name);
+            });
+            addLog(`displayMedia: ${serialized.length} fontes listadas`);
+            return serialized;
+        }
+        catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            addLog(`displayMedia list error: ${message}`);
+            return [];
+        }
+    });
+    ipcMain.handle("desktop:set-selected-source", (_event, payload) => {
+        const nextId = typeof payload?.sourceId === "string" ? payload.sourceId : "";
+        appState.selectedSourceId = nextId;
+        addLog(`displayMedia: selecao manual sourceId=${nextId || "<auto>"}`);
+        if (controlWindow && !controlWindow.isDestroyed()) {
+            controlWindow.webContents.send("desktop:selected-source-updated", {
+                sourceId: nextId,
+            });
+        }
+        return { ok: true, sourceId: nextId };
+    });
+    ipcMain.handle("desktop:capture-error", (_event, payload) => {
+        const stage = payload?.stage || "capture";
+        const message = payload?.message || "erro desconhecido";
+        const detail = payload?.detail ? ` | ${payload.detail}` : "";
+        addLog(`renderer error [${stage}]: ${message}${detail}`);
+        return { ok: true };
     });
     ipcMain.handle("desktop:capture-start", () => {
         appState.captureStatus = "capturing";
@@ -286,6 +416,11 @@ function registerIpcHandlers() {
         const enabled = typeof payload === "boolean" ? payload : Boolean(payload?.enabled);
         setOverlayClickThrough(Boolean(enabled));
         return { ok: true, clickThrough: appState.clickThrough };
+    });
+    ipcMain.handle("desktop:set-overlay-window-visible", (_event, payload) => {
+        const visible = Boolean(payload?.visible);
+        setOverlayWindowVisible(visible);
+        return { ok: true, visible };
     });
     ipcMain.handle("desktop:get-permission-policy", async () => {
         const platform = process.platform;
@@ -537,17 +672,30 @@ app.whenReady().then(async () => {
             const sources = await desktopCapturer.getSources({
                 types: ["screen", "window"],
             });
-            const selected = sources[0];
-            if (!selected) {
+            if (sources.length === 0) {
+                addLog("displayMedia: nenhuma fonte retornada por desktopCapturer");
                 callback({});
                 return;
             }
+            let selected = appState.selectedSourceId
+                ? sources.find((source) => source.id === appState.selectedSourceId)
+                : undefined;
+            if (!selected) {
+                selected =
+                    sources.find((source) => {
+                        const title = (source.name || "").toLowerCase();
+                        return title.includes("meet");
+                    }) || sources[0];
+            }
+            addLog(`displayMedia: fonte selecionada id=${selected.id} | name=${selected.name}`);
             callback({
                 video: selected,
                 audio: "loopback",
             });
         }
-        catch {
+        catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            addLog(`displayMedia handler error: ${message}`);
             callback({});
         }
     }, { useSystemPicker: true });

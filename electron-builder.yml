@@ -7,7 +7,7 @@ directories:
 files:
   - dist-electron/**
   - out/**
-  - electron/preload.mjs
+  - electron/preload.cjs
   - config/**
   - package.json
 extraMetadata:

@@ -8,6 +8,7 @@ type DesktopState = {
   meetingId: string;
   feedbackHttpBase: string;
   anchorMode: "fixed" | "meet-window";
+  selectedSourceId: string;
   update: {
     status:
       | "idle"
@@ -23,11 +24,35 @@ type DesktopState = {
   };
 };
 
+export type DisplaySource = {
+  id: string;
+  name: string;
+  display_id?: string;
+  thumbnailDataUrl?: string;
+  iconDataUrl?: string;
+  appIconDataUrl?: string;
+  isMeet: boolean;
+  isChrome: boolean;
+  kind: "window" | "screen";
+};
+
+export type CaptureReadiness = {
+  ok: boolean;
+  platform: string;
+  macosVersion?: string;
+  macosMajor?: number;
+  microphoneStatus: string;
+  screenStatus: string;
+  missing: Array<"macos-version" | "microphone" | "screen">;
+  notes: string[];
+};
+
 type DesktopApi = {
   getState: () => Promise<DesktopState>;
   startCapture: () => Promise<{ ok: true; captureStatus: "capturing" }>;
   stopCapture: () => Promise<{ ok: true; captureStatus: "idle" }>;
   setClickThrough: (enabled: boolean) => Promise<{ ok: true; clickThrough: boolean }>;
+  setOverlayWindowVisible: (visible: boolean) => Promise<{ ok: true; visible: boolean }>;
   setFeedbackContext: (payload: {
     meetingId?: string;
     feedbackHttpBase?: string;
@@ -77,6 +102,21 @@ type DesktopApi = {
   onUpdateStatus: (
     handler: (payload: DesktopState["update"]) => void,
   ) => () => void;
+  checkCaptureReadiness: () => Promise<CaptureReadiness>;
+  listDisplaySources: () => Promise<DisplaySource[]>;
+  setSelectedSource: (
+    sourceId: string,
+  ) => Promise<{ ok: boolean; sourceId: string }>;
+  reportCaptureError: (payload: {
+    stage: string;
+    message: string;
+    detail?: string;
+  }) => Promise<{ ok: true }>;
+  onLogs: (handler: (payload: string[]) => void) => () => void;
+  onLogEntry: (handler: (payload: { line: string; ts: number }) => void) => () => void;
+  onSelectedSourceUpdated: (
+    handler: (payload: { sourceId: string }) => void,
+  ) => () => void;
 };
 
 declare global {
@@ -86,4 +126,3 @@ declare global {
 }
 
 export {};
-

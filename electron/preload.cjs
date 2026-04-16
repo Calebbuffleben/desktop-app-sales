@@ -1,10 +1,11 @@
-import { contextBridge, ipcRenderer } from "electron";
+const { contextBridge, ipcRenderer } = require("electron");
 
 const ALLOWED_INVOKE_CHANNELS = new Set([
   "desktop:get-state",
   "desktop:capture-start",
   "desktop:capture-stop",
   "desktop:set-click-through",
+  "desktop:set-overlay-window-visible",
   "desktop:set-feedback-context",
   "desktop:protocol-preview",
   "desktop:protocol-validate",
@@ -13,12 +14,19 @@ const ALLOWED_INVOKE_CHANNELS = new Set([
   "desktop:update-check",
   "desktop:update-download",
   "desktop:update-install",
+  "desktop:check-capture-readiness",
+  "desktop:list-display-sources",
+  "desktop:set-selected-source",
+  "desktop:capture-error",
 ]);
 
 const ALLOWED_LISTEN_CHANNELS = new Set([
   "desktop:feedback-context-updated",
   "desktop:anchor-mode-updated",
   "desktop:update-status",
+  "desktop:logs",
+  "desktop:log-entry",
+  "desktop:selected-source-updated",
 ]);
 
 function ensureObjectOrUndefined(value) {
@@ -54,6 +62,8 @@ contextBridge.exposeInMainWorld(
     stopCapture: () => invokeStrict("desktop:capture-stop"),
     setClickThrough: (enabled) =>
       invokeStrict("desktop:set-click-through", { enabled: Boolean(enabled) }),
+    setOverlayWindowVisible: (visible) =>
+      invokeStrict("desktop:set-overlay-window-visible", { visible: Boolean(visible) }),
     setFeedbackContext: (payload) =>
       invokeStrict("desktop:set-feedback-context", ensureObjectOrUndefined(payload)),
     protocolPreview: (payload) => invokeStrict("desktop:protocol-preview", payload),
@@ -63,10 +73,19 @@ contextBridge.exposeInMainWorld(
     checkForUpdates: () => invokeStrict("desktop:update-check"),
     downloadUpdate: () => invokeStrict("desktop:update-download"),
     installUpdateNow: () => invokeStrict("desktop:update-install"),
+    checkCaptureReadiness: () => invokeStrict("desktop:check-capture-readiness"),
+    listDisplaySources: () => invokeStrict("desktop:list-display-sources"),
+    setSelectedSource: (sourceId) =>
+      invokeStrict("desktop:set-selected-source", { sourceId: String(sourceId || "") }),
+    reportCaptureError: (payload) =>
+      invokeStrict("desktop:capture-error", ensureObjectOrUndefined(payload)),
     onFeedbackContextUpdated: (handler) =>
       onStrict("desktop:feedback-context-updated", handler),
     onAnchorModeUpdated: (handler) => onStrict("desktop:anchor-mode-updated", handler),
     onUpdateStatus: (handler) => onStrict("desktop:update-status", handler),
+    onLogs: (handler) => onStrict("desktop:logs", handler),
+    onLogEntry: (handler) => onStrict("desktop:log-entry", handler),
+    onSelectedSourceUpdated: (handler) =>
+      onStrict("desktop:selected-source-updated", handler),
   }),
 );
-

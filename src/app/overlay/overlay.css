@@ -1,0 +1,6 @@
+/* Overlay Electron window uses transparent: true — opaque body from globals.css
+   was painting a full dark rectangle with no feedback. */
+html,
+body {
+  background: transparent !important;
+}
