@@ -24,6 +24,16 @@ const ALLOWED_INVOKE_CHANNELS = new Set([
   "auth:refresh",
   "auth:get-session",
   "auth:get-access-token",
+  "members:list",
+  "members:update-role",
+  "members:remove",
+  "invites:list",
+  "invites:create",
+  "invites:revoke",
+  "invites:accept",
+  "invites:accept-public",
+  "billing:subscription",
+  "billing:upgrade",
 ]);
 
 const ALLOWED_LISTEN_CHANNELS = new Set([
@@ -101,5 +111,15 @@ contextBridge.exposeInMainWorld(
     getAuthSession: () => invokeStrict("auth:get-session"),
     getAccessToken: () => invokeStrict("auth:get-access-token"),
     onAuthSessionUpdated: (handler) => onStrict("auth:session-updated", handler),
+    membersList: () => invokeStrict("members:list"),
+    membersUpdateRole: (payload) => invokeStrict("members:update-role", payload),
+    membersRemove: (payload) => invokeStrict("members:remove", payload),
+    invitesList: () => invokeStrict("invites:list"),
+    invitesCreate: (payload) => invokeStrict("invites:create", payload),
+    invitesRevoke: (payload) => invokeStrict("invites:revoke", payload),
+    invitesAccept: (payload) => invokeStrict("invites:accept", payload),
+    invitesAcceptPublic: (payload) => invokeStrict("invites:accept-public", payload),
+    billingSubscription: () => invokeStrict("billing:subscription"),
+    billingUpgrade: (payload) => invokeStrict("billing:upgrade", payload),
   }),
 );

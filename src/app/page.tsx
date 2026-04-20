@@ -590,17 +590,25 @@ function HomeAuthenticated() {
                     {session.user.email} · <span className="text-cyan-300">{session.tenant.slug}</span>
                   </p>
                   <p className="font-mono text-[10px] uppercase tracking-wider text-zinc-500">
-                    {session.user.role}
+                    {session.membership?.role ?? "—"}
                   </p>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      void logout();
-                    }}
-                    className="mt-1 rounded-md border border-zinc-700/80 bg-zinc-950/80 px-2 py-1 font-mono text-[10px] uppercase tracking-wider text-zinc-300 hover:border-rose-500/60 hover:text-rose-200"
-                  >
-                    Logout
-                  </button>
+                  <div className="mt-1 flex items-center gap-2">
+                    <a
+                      href="/members"
+                      className="rounded-md border border-cyan-500/40 bg-cyan-500/10 px-2 py-1 font-mono text-[10px] uppercase tracking-wider text-cyan-100 hover:bg-cyan-500/20"
+                    >
+                      Membros
+                    </a>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void logout();
+                      }}
+                      className="rounded-md border border-zinc-700/80 bg-zinc-950/80 px-2 py-1 font-mono text-[10px] uppercase tracking-wider text-zinc-300 hover:border-rose-500/60 hover:text-rose-200"
+                    >
+                      Logout
+                    </button>
+                  </div>
                 </div>
               ) : (
                 <p className="text-left text-[11px] text-zinc-500 md:text-right">Google Meet · áudio · overlay</p>

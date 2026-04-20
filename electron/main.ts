@@ -891,6 +891,117 @@ function registerIpcHandlers(): void {
       return null;
     }
   });
+
+  // ---------------------------------------------------------------------
+  // Membership / Invitations / Billing
+  //
+  // These handlers are thin pass-throughs to the backend HTTP API, but all
+  // authz lives server-side (JwtAuthGuard + RolesGuard + membership checks).
+  // The main process attaches the current session's Bearer token; renderer
+  // code never touches raw tokens.
+  // ---------------------------------------------------------------------
+  ipcMain.handle("members:list", async () => authedJson("GET", "/members"));
+  ipcMain.handle("members:update-role", async (_event, payload?: Record<string, unknown>) => {
+    const membershipId = ensureStringField(payload?.membershipId, "membershipId");
+    const role = ensureStringField(payload?.role, "role");
+    return authedJson("PATCH", `/members/${encodeURIComponent(membershipId)}/role`, { role });
+  });
+  ipcMain.handle("members:remove", async (_event, payload?: Record<string, unknown>) => {
+    const membershipId = ensureStringField(payload?.membershipId, "membershipId");
+    return authedJson("DELETE", `/members/${encodeURIComponent(membershipId)}`);
+  });
+
+  ipcMain.handle("invites:list", async () => authedJson("GET", "/invites"));
+  ipcMain.handle("invites:create", async (_event, payload?: Record<string, unknown>) => {
+    const email = ensureStringField(payload?.email, "email");
+    const role =
+      typeof payload?.role === "string" && payload.role.trim() !== ""
+        ? payload.role
+        : undefined;
+    return authedJson("POST", "/invites", { email, role });
+  });
+  ipcMain.handle("invites:revoke", async (_event, payload?: Record<string, unknown>) => {
+    const invitationId = ensureStringField(payload?.invitationId, "invitationId");
+    return authedJson("DELETE", `/invites/${encodeURIComponent(invitationId)}`);
+  });
+  ipcMain.handle("invites:accept", async (_event, payload?: Record<string, unknown>) => {
+    const token = ensureStringField(payload?.token, "token");
+    return authedJson("POST", "/invites/accept", { token });
+  });
+  ipcMain.handle("invites:accept-public", async (_event, payload?: Record<string, unknown>) => {
+    const token = ensureStringField(payload?.token, "token");
+    const password = ensureStringField(payload?.password, "password");
+    const backendHttpBase = sanitizeBackendBase(payload?.backendHttpBase);
+    const name =
+      typeof payload?.name === "string" && payload.name.trim() !== ""
+        ? payload.name
+        : undefined;
+    return authService.acceptInvitePublic({
+      token,
+      password,
+      name,
+      backendHttpBase,
+    });
+  });
+
+  ipcMain.handle("billing:subscription", async () =>
+    authedJson("GET", "/billing/subscription"),
+  );
+  ipcMain.handle("billing:upgrade", async (_event, payload?: Record<string, unknown>) => {
+    const plan = ensureStringField(payload?.plan, "plan");
+    return authedJson("POST", "/billing/upgrade", { plan });
+  });
+}
+
+/**
+ * Issue an authenticated HTTP request to the backend using the current
+ * session. The access token is resolved via `authService.getAccessToken()`
+ * so proactive refresh still applies. Throws a human-readable error when
+ * the backend returns a non-2xx response (carrying the backend's message
+ * when possible so the UI can surface, e.g., 402 / 403 reasons).
+ */
+async function authedJson(
+  method: "GET" | "POST" | "PATCH" | "DELETE",
+  path: string,
+  body?: unknown,
+): Promise<unknown> {
+  const ctx = authService.getAuthContext();
+  if (!ctx) {
+    throw new Error("not authenticated");
+  }
+  const accessToken = (await authService.getAccessToken()) ?? ctx.accessToken;
+  const url = `${ctx.backendHttpBase.replace(/\/$/, "")}${path}`;
+  const init: RequestInit = {
+    method,
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+      Authorization: `Bearer ${accessToken}`,
+    },
+  };
+  if (body !== undefined) {
+    init.body = JSON.stringify(body);
+  }
+  const response = await fetch(url, init);
+  if (response.status === 204) return { ok: true };
+  const text = await response.text();
+  let parsed: unknown = null;
+  if (text) {
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      parsed = { message: text };
+    }
+  }
+  if (!response.ok) {
+    const message =
+      (parsed && typeof parsed === "object" && (parsed as { message?: unknown }).message) ||
+      `HTTP ${response.status}`;
+    const err = new Error(String(message));
+    (err as Error & { status?: number }).status = response.status;
+    throw err;
+  }
+  return parsed ?? { ok: true };
 }
 
 app.whenReady().then(async () => {

@@ -2,6 +2,8 @@ import path from "node:path";
 import fs from "node:fs";
 import { safeStorage, app } from "electron";
 
+export type MembershipRoleValue = "OWNER" | "ADMIN" | "MEMBER";
+
 export interface PersistedAuthSession {
   accessToken: string;
   refreshToken: string;
@@ -10,10 +12,13 @@ export interface PersistedAuthSession {
   tokenType: "Bearer";
   user: {
     id: string;
-    tenantId: string;
     email: string;
     name: string | null;
-    role: string;
+  };
+  membership: {
+    id: string;
+    tenantId: string;
+    role: MembershipRoleValue;
   };
   tenant: {
     id: string;
@@ -51,9 +56,13 @@ export class DesktopAuthStorage {
       if (!this.isEncryptionAvailable()) return null;
       const raw = fs.readFileSync(this.filePath);
       const decrypted = safeStorage.decryptString(raw);
-      const parsed = JSON.parse(decrypted) as PersistedAuthSession;
+      const parsed = JSON.parse(decrypted) as Partial<PersistedAuthSession>;
       if (!parsed?.accessToken || !parsed?.refreshToken) return null;
-      return parsed;
+      // Legacy sessions (pre-membership schema) are discarded and force a
+      // fresh login. Missing `membership` means the token's claims no
+      // longer match the backend's schema.
+      if (!parsed.membership || !parsed.user || !parsed.tenant) return null;
+      return parsed as PersistedAuthSession;
     } catch {
       return null;
     }

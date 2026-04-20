@@ -39,6 +39,7 @@ interface AuthContextValue {
 const UNAUTHENTICATED_SESSION: AuthSessionSnapshot = {
   isAuthenticated: false,
   user: null,
+  membership: null,
   tenant: null,
   accessExpiresAt: null,
   refreshExpiresAt: null,

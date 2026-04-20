@@ -1,5 +1,9 @@
 import { EventEmitter } from "node:events";
-import { DesktopAuthStorage, PersistedAuthSession } from "./auth-storage.ts";
+import {
+  DesktopAuthStorage,
+  MembershipRoleValue,
+  PersistedAuthSession,
+} from "./auth-storage.ts";
 
 interface LoginInput {
   email: string;
@@ -13,6 +17,13 @@ interface RegisterInput extends LoginInput {
   name?: string;
 }
 
+interface AcceptInvitePublicInput {
+  token: string;
+  password: string;
+  name?: string;
+  backendHttpBase: string;
+}
+
 /** Shape returned by backend `/auth/login`, `/auth/register`, `/auth/refresh`. */
 interface BackendAuthSession {
   accessToken: string;
@@ -22,10 +33,13 @@ interface BackendAuthSession {
   tokenType: "Bearer";
   user: {
     id: string;
-    tenantId: string;
     email: string;
     name: string | null;
-    role: string;
+  };
+  membership: {
+    id: string;
+    tenantId: string;
+    role: MembershipRoleValue;
   };
   tenant: {
     id: string;
@@ -37,6 +51,7 @@ interface BackendAuthSession {
 export interface SessionSnapshot {
   isAuthenticated: boolean;
   user: BackendAuthSession["user"] | null;
+  membership: BackendAuthSession["membership"] | null;
   tenant: BackendAuthSession["tenant"] | null;
   accessExpiresAt: number | null;
   refreshExpiresAt: number | null;
@@ -71,6 +86,7 @@ export class DesktopAuthService extends EventEmitter {
       return {
         isAuthenticated: false,
         user: null,
+        membership: null,
         tenant: null,
         accessExpiresAt: null,
         refreshExpiresAt: null,
@@ -80,11 +96,41 @@ export class DesktopAuthService extends EventEmitter {
     return {
       isAuthenticated: true,
       user: this.session.user,
+      membership: this.session.membership,
       tenant: this.session.tenant,
       accessExpiresAt: this.session.accessExpiresAt,
       refreshExpiresAt: this.session.refreshExpiresAt,
       backendHttpBase: this.session.backendHttpBase,
     };
+  }
+
+  /** Used by IPC handlers that need `(baseUrl, accessToken)` pairs. */
+  getAuthContext(): { backendHttpBase: string; accessToken: string } | null {
+    if (!this.session) return null;
+    return {
+      backendHttpBase: this.session.backendHttpBase,
+      accessToken: this.session.accessToken,
+    };
+  }
+
+  /**
+   * Public invite acceptance: creates a brand-new User under an existing
+   * tenant and returns a fresh session scoped to that tenant's membership.
+   */
+  async acceptInvitePublic(
+    input: AcceptInvitePublicInput,
+  ): Promise<SessionSnapshot> {
+    const response = await fetchBackend(
+      input.backendHttpBase,
+      "/invites/accept-public",
+      {
+        token: input.token,
+        password: input.password,
+        name: input.name,
+      },
+    );
+    this.assignSession(response, input.backendHttpBase);
+    return this.snapshot();
   }
 
   async login(input: LoginInput): Promise<SessionSnapshot> {
@@ -198,6 +244,7 @@ export class DesktopAuthService extends EventEmitter {
       refreshExpiresAt: backendSession.refreshExpiresAt,
       tokenType: backendSession.tokenType,
       user: backendSession.user,
+      membership: backendSession.membership,
       tenant: backendSession.tenant,
       backendHttpBase,
     };

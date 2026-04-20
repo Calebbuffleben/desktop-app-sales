@@ -143,16 +143,56 @@ type DesktopApi = {
   onAuthSessionUpdated: (
     handler: (payload: AuthSessionSnapshot) => void,
   ) => () => void;
+  membersList: () => Promise<MemberSummary[]>;
+  membersUpdateRole: (payload: {
+    membershipId: string;
+    role: MembershipRoleValue;
+  }) => Promise<MemberSummary>;
+  membersRemove: (payload: { membershipId: string }) => Promise<{ removed: true }>;
+  invitesList: () => Promise<InvitationSummary[]>;
+  invitesCreate: (payload: {
+    email: string;
+    role?: MembershipRoleValue;
+  }) => Promise<{
+    id: string;
+    email: string;
+    role: MembershipRoleValue;
+    token: string;
+    expiresAt: string;
+  }>;
+  invitesRevoke: (payload: { invitationId: string }) => Promise<{ revoked: true }>;
+  invitesAccept: (payload: { token: string }) => Promise<{
+    membershipId: string;
+    tenantId: string;
+    tenantSlug: string;
+    role: MembershipRoleValue;
+  }>;
+  invitesAcceptPublic: (payload: {
+    token: string;
+    password: string;
+    name?: string;
+    backendHttpBase: string;
+  }) => Promise<AuthSessionSnapshot>;
+  billingSubscription: () => Promise<SubscriptionSnapshot>;
+  billingUpgrade: (payload: {
+    plan: PlanValue;
+  }) => Promise<SubscriptionSnapshot>;
 };
+
+export type MembershipRoleValue = "OWNER" | "ADMIN" | "MEMBER";
+export type PlanValue = "FREE" | "PRO" | "ENTERPRISE";
 
 export type AuthSessionSnapshot = {
   isAuthenticated: boolean;
   user: {
     id: string;
-    tenantId: string;
     email: string;
     name: string | null;
-    role: string;
+  } | null;
+  membership: {
+    id: string;
+    tenantId: string;
+    role: MembershipRoleValue;
   } | null;
   tenant: {
     id: string;
@@ -162,6 +202,35 @@ export type AuthSessionSnapshot = {
   accessExpiresAt: number | null;
   refreshExpiresAt: number | null;
   backendHttpBase: string | null;
+};
+
+export type MemberSummary = {
+  id: string;
+  userId: string;
+  email: string;
+  name: string | null;
+  role: MembershipRoleValue;
+  createdAt: string;
+  lastLoginAt: string | null;
+};
+
+export type InvitationSummary = {
+  id: string;
+  email: string;
+  role: MembershipRoleValue;
+  status: "PENDING" | "ACCEPTED" | "REVOKED" | "EXPIRED";
+  expiresAt: string;
+  createdAt: string;
+  invitedById: string;
+};
+
+export type SubscriptionSnapshot = {
+  plan: PlanValue;
+  status: string;
+  maxUsers: number;
+  memberCount: number;
+  pendingInvites: number;
+  seatsRemaining: number;
 };
 
 declare global {
