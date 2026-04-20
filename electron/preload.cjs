@@ -18,6 +18,12 @@ const ALLOWED_INVOKE_CHANNELS = new Set([
   "desktop:list-display-sources",
   "desktop:set-selected-source",
   "desktop:capture-error",
+  "auth:login",
+  "auth:register",
+  "auth:logout",
+  "auth:refresh",
+  "auth:get-session",
+  "auth:get-access-token",
 ]);
 
 const ALLOWED_LISTEN_CHANNELS = new Set([
@@ -27,6 +33,7 @@ const ALLOWED_LISTEN_CHANNELS = new Set([
   "desktop:logs",
   "desktop:log-entry",
   "desktop:selected-source-updated",
+  "auth:session-updated",
 ]);
 
 function ensureObjectOrUndefined(value) {
@@ -87,5 +94,12 @@ contextBridge.exposeInMainWorld(
     onLogEntry: (handler) => onStrict("desktop:log-entry", handler),
     onSelectedSourceUpdated: (handler) =>
       onStrict("desktop:selected-source-updated", handler),
+    authLogin: (payload) => invokeStrict("auth:login", payload),
+    authRegister: (payload) => invokeStrict("auth:register", payload),
+    authLogout: () => invokeStrict("auth:logout"),
+    authRefresh: () => invokeStrict("auth:refresh"),
+    getAuthSession: () => invokeStrict("auth:get-session"),
+    getAccessToken: () => invokeStrict("auth:get-access-token"),
+    onAuthSessionUpdated: (handler) => onStrict("auth:session-updated", handler),
   }),
 );

@@ -14,7 +14,15 @@ export type FeedbackPayload = {
 
 export type FeedbackClientOptions = {
   meetingId: string;
+  /** Tenant id from the authenticated session; used as a redundant hint
+   * alongside the JWT. The backend ultimately derives tenantId from the
+   * token — this field exists so the client can fail fast on mismatches. */
+  tenantId: string;
   httpBase: string;
+  /** Returns a valid access token (refreshing if needed). May return null
+   * if the user is unauthenticated, in which case the client MUST NOT open
+   * network connections. */
+  getAccessToken: () => Promise<string | null>;
   onFeedback: (payload: FeedbackPayload) => void;
   onStatus?: (status: string) => void;
   onState?: (state: FeedbackConnectionState) => void;
@@ -119,7 +127,22 @@ export class DesktopFeedbackClient {
   private async pollOnce(): Promise<void> {
     const url = `${this.opts.httpBase}/feedback/metrics/${encodeURIComponent(this.opts.meetingId)}`;
     try {
-      const response = await fetch(url, { credentials: "include" });
+      const token = await this.opts.getAccessToken();
+      if (!token) {
+        this.status("feedback polling skipped: not authenticated");
+        return;
+      }
+      const response = await fetch(url, {
+        // Bearer token is the sole authentication channel; cookies are not
+        // used anywhere in this pipeline. `credentials: "include"` would
+        // pin CORS to an allowlisted origin for no benefit (see the multi-
+        // tenant auth plan).
+        credentials: "omit",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "X-Tenant-Id": this.opts.tenantId,
+        },
+      });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data = (await response.json()) as { recent?: Record<string, unknown>[] };
       if (!Array.isArray(data.recent) || data.recent.length === 0) return;
@@ -166,7 +189,7 @@ export class DesktopFeedbackClient {
     void this.pollOnce();
   }
 
-  start(): void {
+  async start(): Promise<void> {
     this.stop();
     this.baselineDone = false;
     this.seenIds.clear();
@@ -178,6 +201,17 @@ export class DesktopFeedbackClient {
       nextReconnectInMs: undefined,
       lastError: undefined,
     });
+
+    const token = await this.opts.getAccessToken();
+    if (!token) {
+      this.status("feedback client idle: not authenticated");
+      this.setState({
+        socketStatus: "idle",
+        pollingActive: false,
+        lastError: "unauthenticated",
+      });
+      return;
+    }
 
     if (this.opts.forcePolling) {
       this.status("feedback running in forced polling mode");
@@ -191,6 +225,14 @@ export class DesktopFeedbackClient {
       reconnection: true,
       reconnectionAttempts: 10,
       reconnectionDelay: 1000,
+      auth: {
+        token,
+        tenantId: this.opts.tenantId,
+      },
+      extraHeaders: {
+        Authorization: `Bearer ${token}`,
+        "X-Tenant-Id": this.opts.tenantId,
+      },
     });
 
     this.socket.on("connect", () => {
@@ -201,7 +243,10 @@ export class DesktopFeedbackClient {
         nextReconnectInMs: undefined,
         lastError: undefined,
       });
-      this.socket?.emit("join-room", `feedback:${this.opts.meetingId}`);
+      this.socket?.emit("join-room", {
+        meetingId: this.opts.meetingId,
+        tenantId: this.opts.tenantId,
+      });
     });
 
     this.socket.on("room-joined", (payload: { recent?: Record<string, unknown>[] }) => {
@@ -248,9 +293,24 @@ export class DesktopFeedbackClient {
         nextReconnectInMs: retryMs,
       });
       this.status(`feedback reconnect attempt ${attempt} (next ~${retryMs}ms)`);
+      void this.refreshSocketAuth();
     });
 
     this.startPolling();
+  }
+
+  private async refreshSocketAuth(): Promise<void> {
+    if (!this.socket) return;
+    try {
+      const token = await this.opts.getAccessToken();
+      if (!token) return;
+      (this.socket as Socket & { auth?: unknown }).auth = {
+        token,
+        tenantId: this.opts.tenantId,
+      };
+    } catch {
+      /* swallow; socket will fail to connect and fall back to polling */
+    }
   }
 
   stop(): void {

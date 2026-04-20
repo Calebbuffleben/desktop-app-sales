@@ -5,6 +5,7 @@ import {
   DesktopFeedbackClient,
   type FeedbackPayload,
 } from "@/shared/feedback-client";
+import { useAuth } from "@/shared/auth-context";
 
 type CaptureStatus = "idle" | "capturing";
 type OverlayItem = {
@@ -139,6 +140,7 @@ function FeedbackTipCard({
 }
 
 export default function OverlayPage() {
+  const { session } = useAuth();
   const [captureStatus, setCaptureStatus] = useState<CaptureStatus>("idle");
   const [meetingId, setMeetingId] = useState("abc-defg-hij");
   const [feedbackHttpBase, setFeedbackHttpBase] = useState("http://localhost:3001");
@@ -174,9 +176,13 @@ export default function OverlayPage() {
 
   useEffect(() => {
     if (!meetingId || !feedbackHttpBase) return;
+    if (!session.isAuthenticated || !session.tenant) return;
     const client = new DesktopFeedbackClient({
       meetingId,
+      tenantId: session.tenant.id,
       httpBase: feedbackHttpBase,
+      getAccessToken: async () =>
+        (await window.desktopApi?.getAccessToken?.()) ?? null,
       onStatus: (status) => setStatusLine(status),
       onFeedback: (payload) => {
         const id = payload.id || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -189,9 +195,9 @@ export default function OverlayPage() {
         }, ITEM_TTL_MS);
       },
     });
-    client.start();
+    void client.start();
     return () => client.stop();
-  }, [meetingId, feedbackHttpBase]);
+  }, [meetingId, feedbackHttpBase, session.isAuthenticated, session.tenant]);
 
   useEffect(() => {
     if (items.length === 0) return;

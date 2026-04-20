@@ -173,6 +173,35 @@ ENABLE_FEEDBACK_TEST_ENDPOINT=true pnpm desktop:test:phase7
 - Critérios e checklist completos em:
   - `docs/phase7-parity-criteria.md`
 
+## Autenticação e multi-tenancy
+
+O cliente desktop agora requer login antes de expor controles de captura ou
+overlay. Fluxo:
+
+- **Main process**: `electron/auth-service.ts` orquestra login/register/refresh/
+  logout contra os endpoints `/auth/*` do backend. Sessões são persistidas via
+  `electron/auth-storage.ts` usando `safeStorage` (keychain do SO); se o OS não
+  suportar encriptação o serviço se recusa a gravar.
+- **IPC**: canais allowlisted em `electron/preload.cjs` — `auth:login`,
+  `auth:register`, `auth:logout`, `auth:refresh`, `auth:get-session`,
+  `auth:get-access-token`, `auth:session-updated`. Renderer só enxerga esses.
+- **Renderer**: `src/shared/auth-context.tsx` (Provider global) +
+  `src/shared/session-gate.tsx` gate-keepam toda a UI. `SessionGate` redireciona
+  para `/login` sem sessão ativa; `LoginGate` empurra usuário autenticado para
+  longe de `/login`.
+- **Fluxo de rede**:
+  - `feedback-client.ts` obtém access token por IPC em cada conexão (Socket.IO
+    `auth` + `extraHeaders`) e em cada retry/poll.
+  - `audio-capture-service.ts` rebuilda a URL do `/egress-audio` com
+    `?token=...&tenantId=...` a cada reconexão. `tenantId` vem da sessão, nunca
+    do usuário.
+- **CSP**: header `Content-Security-Policy` injetado pelo main via
+  `session.defaultSession.webRequest.onHeadersReceived`, com `connect-src`
+  derivado de `BACKEND_WS_BASE` para cobrir HTTP e WS da mesma origem. Também
+  enviamos `X-Content-Type-Options: nosniff` e `Referrer-Policy: no-referrer`.
+- **Referência completa**: [`../docs/auth-architecture.md`](../docs/auth-architecture.md)
+  e [`../docs/tenancy.md`](../docs/tenancy.md).
+
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
 ## Getting Started

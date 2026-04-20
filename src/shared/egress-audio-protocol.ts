@@ -9,6 +9,13 @@ export type EgressAudioParams = {
   track?: string;
   sampleRate?: number;
   channels?: number;
+  /** Optional JWT access token, appended as `?token=` on the URL. The backend
+   * WS upgrade handler validates the token and captures the tenant context
+   * as a closure for the connection lifetime. */
+  token?: string;
+  /** Optional tenant id for redundant validation — backend will `PERMISSION_DENIED`
+   * on mismatch against the token's `tid` claim. */
+  tenantId?: string;
 };
 
 function sanitize(value: string): string {
@@ -90,6 +97,12 @@ export function buildEgressAudioWsUrl(params: EgressAudioParams): string {
   url.searchParams.set("track", track);
   url.searchParams.set("sampleRate", String(sampleRate > 0 ? sampleRate : 16000));
   url.searchParams.set("channels", String(channels > 0 ? channels : 1));
+  if (params.token) {
+    url.searchParams.set("token", params.token);
+  }
+  if (params.tenantId) {
+    url.searchParams.set("tenantId", sanitize(params.tenantId));
+  }
   return url.toString();
 }
 

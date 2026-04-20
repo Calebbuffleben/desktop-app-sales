@@ -13,6 +13,8 @@ import {
   DesktopFeedbackClient,
   type FeedbackConnectionState,
 } from "@/shared/feedback-client";
+import { SessionGate } from "@/shared/session-gate";
+import { useAuth } from "@/shared/auth-context";
 
 type CaptureErrorInfo = {
   stage: string;
@@ -104,6 +106,15 @@ function CopilotSection({
 }
 
 export default function Home() {
+  return (
+    <SessionGate>
+      <HomeAuthenticated />
+    </SessionGate>
+  );
+}
+
+function HomeAuthenticated() {
+  const { session, logout } = useAuth();
   const [bridgeReady, setBridgeReady] = useState(false);
   const [isElectronRuntime, setIsElectronRuntime] = useState(false);
   const [captureStatus, setCaptureStatus] = useState<CaptureStatus>("idle");
@@ -223,7 +234,9 @@ export default function Home() {
         setConfig(state.config);
         setLogs(state.logs);
         setMeetingId(state.meetingId || "");
-        setFeedbackBase(state.feedbackHttpBase || "http://localhost:3001");
+        setFeedbackBase(
+          session.backendHttpBase || state.feedbackHttpBase || "http://localhost:3001",
+        );
         setAnchorMode(state.anchorMode);
         setSelectedSourceId(state.selectedSourceId || "");
         setUpdateState(
@@ -291,9 +304,13 @@ export default function Home() {
 
   useEffect(() => {
     if (!isBridgeAvailable || !meetingId || !feedbackBase) return;
+    if (!session.isAuthenticated || !session.tenant) return;
     const client = new DesktopFeedbackClient({
       meetingId,
+      tenantId: session.tenant.id,
       httpBase: feedbackBase,
+      getAccessToken: async () =>
+        (await window.desktopApi?.getAccessToken?.()) ?? null,
       onFeedback: () => {},
       onStatus: (status) => {
         if (!debugLogs) return;
@@ -303,16 +320,32 @@ export default function Home() {
       forcePolling,
       debug: debugLogs,
     });
-    client.start();
+    void client.start();
     return () => {
       client.stop();
     };
-  }, [isBridgeAvailable, meetingId, feedbackBase, forcePolling, debugLogs]);
+  }, [
+    isBridgeAvailable,
+    meetingId,
+    feedbackBase,
+    forcePolling,
+    debugLogs,
+    session.isAuthenticated,
+    session.tenant,
+  ]);
 
   async function handleStartCapture(): Promise<void> {
     if (!window.desktopApi || !config) return;
+    if (!session.isAuthenticated || !session.tenant) {
+      reportError(
+        "start-capture",
+        new Error("not authenticated — please log in before starting capture"),
+      );
+      return;
+    }
     try {
       setCaptureError(null);
+      const tenantId = session.tenant.id;
       const result = await captureService.start({
         config,
         meetUrl,
@@ -321,6 +354,9 @@ export default function Home() {
         track,
         sourceMode,
         debug: debugLogs,
+        tenantId,
+        getAccessToken: async () =>
+          (await window.desktopApi?.getAccessToken?.()) ?? null,
       });
       setCaptureStatus("capturing");
       setCaptureDetails(
@@ -548,7 +584,27 @@ export default function Home() {
                 <span className="h-2 w-2 shrink-0 rounded-full bg-cyan-400 shadow-[0_0_10px_rgba(34,211,238,0.8)]" />
                 Pronto para insight em tempo real
               </span>
-              <p className="text-left text-[11px] text-zinc-500 md:text-right">Google Meet · áudio · overlay</p>
+              {session.user && session.tenant ? (
+                <div className="flex flex-col items-start gap-1 md:items-end">
+                  <p className="font-mono text-[11px] text-zinc-300">
+                    {session.user.email} · <span className="text-cyan-300">{session.tenant.slug}</span>
+                  </p>
+                  <p className="font-mono text-[10px] uppercase tracking-wider text-zinc-500">
+                    {session.user.role}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void logout();
+                    }}
+                    className="mt-1 rounded-md border border-zinc-700/80 bg-zinc-950/80 px-2 py-1 font-mono text-[10px] uppercase tracking-wider text-zinc-300 hover:border-rose-500/60 hover:text-rose-200"
+                  >
+                    Logout
+                  </button>
+                </div>
+              ) : (
+                <p className="text-left text-[11px] text-zinc-500 md:text-right">Google Meet · áudio · overlay</p>
+              )}
             </div>
           </div>
         </header>

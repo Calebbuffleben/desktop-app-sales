@@ -117,6 +117,51 @@ type DesktopApi = {
   onSelectedSourceUpdated: (
     handler: (payload: { sourceId: string }) => void,
   ) => () => void;
+  authLogin: (payload: {
+    email: string;
+    password: string;
+    tenantSlug?: string;
+    backendHttpBase: string;
+  }) => Promise<AuthSessionSnapshot>;
+  authRegister: (payload: {
+    email: string;
+    password: string;
+    tenantSlug?: string;
+    tenantName?: string;
+    name?: string;
+    backendHttpBase: string;
+  }) => Promise<AuthSessionSnapshot>;
+  authLogout: () => Promise<{ ok: true }>;
+  authRefresh: () => Promise<AuthSessionSnapshot>;
+  getAuthSession: () => Promise<AuthSessionSnapshot>;
+  /**
+   * Returns a short-lived access token for use by the renderer when it needs
+   * to establish Socket.IO/WebSocket connections directly. Token is `null`
+   * whenever the user is not authenticated.
+   */
+  getAccessToken: () => Promise<string | null>;
+  onAuthSessionUpdated: (
+    handler: (payload: AuthSessionSnapshot) => void,
+  ) => () => void;
+};
+
+export type AuthSessionSnapshot = {
+  isAuthenticated: boolean;
+  user: {
+    id: string;
+    tenantId: string;
+    email: string;
+    name: string | null;
+    role: string;
+  } | null;
+  tenant: {
+    id: string;
+    slug: string;
+    name: string;
+  } | null;
+  accessExpiresAt: number | null;
+  refreshExpiresAt: number | null;
+  backendHttpBase: string | null;
 };
 
 declare global {

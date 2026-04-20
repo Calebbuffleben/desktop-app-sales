@@ -14,6 +14,7 @@ import {
   wsToHttpBase,
 } from "../src/shared/egress-audio-protocol.ts";
 import WebSocket from "ws";
+import { DesktopAuthService, SessionSnapshot } from "./auth-service.ts";
 
 const {
   app,
@@ -58,6 +59,45 @@ const appState = {
 
 let controlWindow: BrowserWindowType | null = null;
 let overlayWindow: BrowserWindowType | null = null;
+const authService = new DesktopAuthService();
+
+function broadcastAuthSession(snapshot: SessionSnapshot): void {
+  if (controlWindow && !controlWindow.isDestroyed()) {
+    controlWindow.webContents.send("auth:session-updated", snapshot);
+  }
+}
+
+authService.on("session-updated", (snapshot: SessionSnapshot) => {
+  broadcastAuthSession(snapshot);
+  addLog(
+    `Auth session updated | authenticated=${snapshot.isAuthenticated} | tenant=${snapshot.tenant?.slug || "n/a"}`,
+  );
+});
+authService.on("persistence-error", (message: string) => {
+  addLog(`Auth persistence warning | ${message}`);
+});
+
+function ensureStringField(value: unknown, field: string): string {
+  if (typeof value !== "string" || value.trim() === "") {
+    throw new Error(`missing field: ${field}`);
+  }
+  return value;
+}
+
+function sanitizeBackendBase(raw: unknown): string {
+  const value = ensureStringField(raw, "backendHttpBase");
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      throw new Error("backendHttpBase must be http(s)");
+    }
+    return parsed.origin;
+  } catch (err) {
+    throw new Error(
+      `invalid backendHttpBase: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+}
 
 const isDev = !app.isPackaged;
 const devServerUrl = process.env.NEXT_DEV_SERVER_URL ?? "http://localhost:3210";
@@ -660,6 +700,23 @@ function registerIpcHandlers(): void {
       typeof payload?.sampleRate === "number" ? payload.sampleRate : defaults.sampleRate;
     const channels = typeof payload?.channels === "number" ? payload.channels : defaults.channels;
 
+    // The backend enforces JWT on `/egress-audio` upgrade (see
+    // `egress-audio-gateway.ts`). Pull the access token from the auth
+    // service so the diagnostic ping does not get closed with 1008.
+    let token: string | undefined;
+    let tenantId: string | undefined;
+    try {
+      const snap = authService.snapshot();
+      if (snap.isAuthenticated) {
+        token = (await authService.getAccessToken()) || undefined;
+        tenantId = snap.tenant?.id;
+      }
+    } catch (err) {
+      addLog(
+        `Protocol validation auth lookup failed | ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+
     const wsUrl = buildEgressAudioWsUrl({
       baseWs: defaults.baseWs,
       egressPath: defaults.egressPath,
@@ -669,10 +726,16 @@ function registerIpcHandlers(): void {
       track,
       sampleRate,
       channels,
+      token,
+      tenantId,
     });
     const payloadBuffer = buildPcm16SilentFrame(sampleRate, channels);
 
-    addLog(`Protocol validation start | ws=${wsUrl}`);
+    // Redact token from the log line — never surface raw JWTs in telemetry.
+    const loggedUrl = token ? wsUrl.replace(/token=[^&]+/, "token=***") : wsUrl;
+    addLog(
+      `Protocol validation start | ws=${loggedUrl}${token ? "" : " (unauthenticated — backend will reject in prod)"}`,
+    );
 
     return new Promise<{
       ok: boolean;
@@ -759,6 +822,75 @@ function registerIpcHandlers(): void {
       });
     });
   });
+
+  ipcMain.handle("auth:login", async (_event, payload?: Record<string, unknown>) => {
+    const email = ensureStringField(payload?.email, "email");
+    const password = ensureStringField(payload?.password, "password");
+    const backendHttpBase = sanitizeBackendBase(payload?.backendHttpBase);
+    const tenantSlug =
+      typeof payload?.tenantSlug === "string" && payload.tenantSlug.trim() !== ""
+        ? payload.tenantSlug
+        : undefined;
+    const snapshot = await authService.login({
+      email,
+      password,
+      tenantSlug,
+      backendHttpBase,
+    });
+    return snapshot;
+  });
+
+  ipcMain.handle("auth:register", async (_event, payload?: Record<string, unknown>) => {
+    const email = ensureStringField(payload?.email, "email");
+    const password = ensureStringField(payload?.password, "password");
+    const backendHttpBase = sanitizeBackendBase(payload?.backendHttpBase);
+    const tenantSlug =
+      typeof payload?.tenantSlug === "string" && payload.tenantSlug.trim() !== ""
+        ? payload.tenantSlug
+        : undefined;
+    const tenantName =
+      typeof payload?.tenantName === "string" && payload.tenantName.trim() !== ""
+        ? payload.tenantName
+        : undefined;
+    const name =
+      typeof payload?.name === "string" && payload.name.trim() !== ""
+        ? payload.name
+        : undefined;
+    const snapshot = await authService.register({
+      email,
+      password,
+      tenantSlug,
+      tenantName,
+      name,
+      backendHttpBase,
+    });
+    return snapshot;
+  });
+
+  ipcMain.handle("auth:logout", async () => {
+    await authService.logout();
+    // Force stop capture on logout to avoid sending frames on a dead session.
+    if (appState.captureStatus === "capturing") {
+      appState.captureStatus = "idle";
+      addLog("Capture stopped due to logout");
+    }
+    return { ok: true };
+  });
+
+  ipcMain.handle("auth:refresh", async () => {
+    await authService.refreshAccessToken();
+    return authService.snapshot();
+  });
+
+  ipcMain.handle("auth:get-session", () => authService.snapshot());
+
+  ipcMain.handle("auth:get-access-token", async () => {
+    try {
+      return await authService.getAccessToken();
+    } catch {
+      return null;
+    }
+  });
 }
 
 app.whenReady().then(async () => {
@@ -774,6 +906,49 @@ app.whenReady().then(async () => {
     callback(permission === "media");
   });
   session.defaultSession.setPermissionCheckHandler((_wc, permission) => permission === "media");
+
+  // Renderer CSP. Tight default; connect-src allows backend HTTP/WS and Socket.IO.
+  // We rebuild the connect-src list from the loaded desktop config so env overrides
+  // propagate without editing this string.
+  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    const connectOrigins = new Set<string>([
+      "'self'",
+      "http://localhost:3001",
+      "ws://localhost:3001",
+    ]);
+    try {
+      const wsBase = new URL(initialConfig.BACKEND_WS_BASE);
+      connectOrigins.add(wsBase.origin);
+      connectOrigins.add(wsToHttpBase(initialConfig.BACKEND_WS_BASE));
+    } catch {
+      /* ignore malformed url */
+    }
+    const connectSrc = Array.from(connectOrigins).join(" ");
+    const csp = [
+      "default-src 'self'",
+      // Next.js dev injects inline scripts for HMR; production build is self-only.
+      isDev
+        ? "script-src 'self' 'unsafe-inline' 'unsafe-eval'"
+        : "script-src 'self'",
+      "style-src 'self' 'unsafe-inline'",
+      "img-src 'self' data: blob:",
+      "font-src 'self' data:",
+      "media-src 'self' blob: mediastream:",
+      `connect-src ${connectSrc}`,
+      "frame-ancestors 'none'",
+      "object-src 'none'",
+      "base-uri 'self'",
+      "form-action 'self'",
+    ].join("; ");
+    callback({
+      responseHeaders: {
+        ...details.responseHeaders,
+        "Content-Security-Policy": [csp],
+        "X-Content-Type-Options": ["nosniff"],
+        "Referrer-Policy": ["no-referrer"],
+      },
+    });
+  });
 
   session.defaultSession.setDisplayMediaRequestHandler(
     async (_request, callback) => {
@@ -813,6 +988,16 @@ app.whenReady().then(async () => {
   );
 
   registerIpcHandlers();
+  try {
+    const snapshot = authService.hydrate();
+    addLog(
+      `Auth hydrated | authenticated=${snapshot.isAuthenticated} | tenant=${snapshot.tenant?.slug || "n/a"}`,
+    );
+  } catch (err) {
+    addLog(
+      `Auth hydrate failed | ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
   autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = true;
   autoUpdater.on("checking-for-update", () =>

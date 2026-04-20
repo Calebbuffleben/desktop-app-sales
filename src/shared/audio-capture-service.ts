@@ -19,6 +19,13 @@ export type StartCaptureInput = {
   debug?: boolean;
   micGain?: number;
   loopbackGain?: number;
+  /** Tenant id from the authenticated session. Sent as a redundant hint on
+   * the WS URL; backend validates against `token.tid`. */
+  tenantId: string;
+  /** Provides a short-lived access token for the egress WebSocket. Called
+   * every time the service (re)opens a connection so refreshed tokens take
+   * effect without restarting capture. */
+  getAccessToken: () => Promise<string | null>;
 };
 
 export type CaptureStatus = "idle" | "starting" | "capturing";
@@ -171,6 +178,18 @@ export class DesktopAudioCaptureService {
   private reconnectAttempt = 0;
   private wsUrl = "";
   private debug = false;
+  private baseWsParams: {
+    baseWs: string;
+    egressPath: string;
+    meetUrl?: string;
+    meetingId?: string;
+    participant: string;
+    track: string;
+    sampleRate: number;
+    channels: number;
+    tenantId: string;
+  } | null = null;
+  private getAccessToken: (() => Promise<string | null>) | null = null;
   private connectingPromise: Promise<void> | null = null;
   private wsState: AudioWsState = {
     status: "idle",
@@ -213,12 +232,43 @@ export class DesktopAudioCaptureService {
     this.onMeter?.(this.meter);
   }
 
+  private async resolveWsUrl(): Promise<string> {
+    if (!this.baseWsParams) {
+      throw new Error("audio capture not configured");
+    }
+    const tokenProvider = this.getAccessToken;
+    const token = tokenProvider ? await tokenProvider() : null;
+    if (!token) {
+      throw new Error("no access token available for egress websocket");
+    }
+    const url = buildEgressAudioWsUrl({
+      ...this.baseWsParams,
+      token,
+    });
+    this.wsUrl = url;
+    return url;
+  }
+
   private connectWebSocket(): Promise<void> {
     if (this.connectingPromise) return this.connectingPromise;
-    this.connectingPromise = new Promise<void>((resolve, reject) => {
+    const promise = (async () => {
+      try {
+        const url = await this.resolveWsUrl();
+        await this.openWebSocket(url);
+      } catch (err) {
+        this.connectingPromise = null;
+        throw err;
+      }
+    })();
+    this.connectingPromise = promise;
+    return promise;
+  }
+
+  private openWebSocket(url: string): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
       let ws: WebSocket;
       try {
-        ws = new WebSocket(this.wsUrl);
+        ws = new WebSocket(url);
       } catch (err) {
         this.connectingPromise = null;
         reject(err instanceof Error ? err : new Error(String(err)));
@@ -275,7 +325,6 @@ export class DesktopAudioCaptureService {
         this.scheduleReconnect("websocket closed");
       };
     });
-    return this.connectingPromise;
   }
 
   private scheduleReconnect(reason: string): void {
@@ -441,8 +490,15 @@ export class DesktopAudioCaptureService {
     const targetSampleRate = input.config.DEFAULT_SAMPLE_RATE || TARGET_SAMPLE_RATE;
     const channels = input.config.DEFAULT_CHANNELS || 1;
 
+    if (!input.tenantId) {
+      throw new Error("tenantId is required to start egress capture");
+    }
+    if (typeof input.getAccessToken !== "function") {
+      throw new Error("getAccessToken is required to start egress capture");
+    }
+
     this.debug = Boolean(input.debug);
-    this.wsUrl = buildEgressAudioWsUrl({
+    this.baseWsParams = {
       baseWs: input.config.BACKEND_WS_BASE,
       egressPath: input.config.EGRESS_AUDIO_PATH,
       meetUrl: input.meetUrl,
@@ -451,7 +507,10 @@ export class DesktopAudioCaptureService {
       track: input.track || "desktop-audio",
       sampleRate: targetSampleRate,
       channels,
-    });
+      tenantId: input.tenantId,
+    };
+    this.getAccessToken = input.getAccessToken;
+    this.wsUrl = "";
     this.status = "starting";
     this.reconnectAttempt = 0;
     this.meter = {
@@ -748,6 +807,8 @@ export class DesktopAudioCaptureService {
     this.connectingPromise = null;
     this.reconnectAttempt = 0;
     this.wsUrl = "";
+    this.baseWsParams = null;
+    this.getAccessToken = null;
     this.setWsState({
       status: "idle",
       reconnectAttempt: 0,
