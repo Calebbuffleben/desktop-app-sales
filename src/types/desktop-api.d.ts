@@ -47,12 +47,51 @@ export type CaptureReadiness = {
   notes: string[];
 };
 
+export type PlaybookActionTypeValue = "copy_text" | "open_url" | "noop";
+
+export type PlaybookStepPayload = {
+  id: string;
+  label: string;
+  detail?: string;
+  action: {
+    type: PlaybookActionTypeValue;
+    payload?: string;
+  };
+};
+
+/** Row returned by `GET /playbooks` (dates as ISO strings over JSON). */
+export type PlaybookTemplateSummary = {
+  id: string;
+  tenantId: string;
+  key: string;
+  title: string;
+  description: string | null;
+  steps: unknown;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type CreatePlaybookTemplatePayload = {
+  key: string;
+  title: string;
+  description?: string;
+  steps: PlaybookStepPayload[];
+};
+
+export type UpdatePlaybookTemplatePayload = {
+  title?: string;
+  description?: string;
+  steps?: PlaybookStepPayload[];
+};
+
 type DesktopApi = {
   getState: () => Promise<DesktopState>;
   startCapture: () => Promise<{ ok: true; captureStatus: "capturing" }>;
   stopCapture: () => Promise<{ ok: true; captureStatus: "idle" }>;
   setClickThrough: (enabled: boolean) => Promise<{ ok: true; clickThrough: boolean }>;
   setOverlayWindowVisible: (visible: boolean) => Promise<{ ok: true; visible: boolean }>;
+  /** Open https URLs only; hostname must match `PLAYBOOK_URL_ALLOWLIST` (same CSV as backend). */
+  openExternalUrl: (url: string) => Promise<{ ok: boolean; error?: string }>;
   setFeedbackContext: (payload: {
     meetingId?: string;
     feedbackHttpBase?: string;
@@ -177,6 +216,12 @@ type DesktopApi = {
   billingUpgrade: (payload: {
     plan: PlanValue;
   }) => Promise<SubscriptionSnapshot>;
+  playbooksList: () => Promise<PlaybookTemplateSummary[]>;
+  playbooksCreate: (payload: CreatePlaybookTemplatePayload) => Promise<PlaybookTemplateSummary>;
+  playbooksUpdate: (
+    payload: { id: string } & UpdatePlaybookTemplatePayload,
+  ) => Promise<PlaybookTemplateSummary>;
+  playbooksRemove: (payload: { id: string }) => Promise<{ deleted: true } | unknown>;
 };
 
 export type MembershipRoleValue = "OWNER" | "ADMIN" | "MEMBER";

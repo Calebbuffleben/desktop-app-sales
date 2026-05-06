@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import {
   DesktopAudioCaptureService,
@@ -115,6 +116,7 @@ export default function Home() {
 
 function HomeAuthenticated() {
   const { session, logout } = useAuth();
+  const isAdmin = session.membership?.role === "OWNER" || session.membership?.role === "ADMIN";
   const [bridgeReady, setBridgeReady] = useState(false);
   const [isElectronRuntime, setIsElectronRuntime] = useState(false);
   const [captureStatus, setCaptureStatus] = useState<CaptureStatus>("idle");
@@ -593,6 +595,14 @@ function HomeAuthenticated() {
                     {session.membership?.role ?? "—"}
                   </p>
                   <div className="mt-1 flex items-center gap-2">
+                    {isAdmin ? (
+                      <Link
+                        href="/playbooks"
+                        className="rounded-md border border-violet-500/40 bg-violet-500/10 px-2 py-1 font-mono text-[10px] uppercase tracking-wider text-violet-100 hover:bg-violet-500/20"
+                      >
+                        Playbooks
+                      </Link>
+                    ) : null}
                     <a
                       href="/members"
                       className="rounded-md border border-cyan-500/40 bg-cyan-500/10 px-2 py-1 font-mono text-[10px] uppercase tracking-wider text-cyan-100 hover:bg-cyan-500/20"
