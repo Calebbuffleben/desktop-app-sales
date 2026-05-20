@@ -95,6 +95,7 @@ Feedback em tempo real no overlay com paridade funcional da extensão:
   - IPC `desktop:set-feedback-context`
   - preload `onFeedbackContextUpdated`
   - meetingId/base HTTP sincronizados entre janela de controle e overlay
+- **Playbooks (Passo 7–8)**: `metadata.playbook` no overlay vira título + botões (`copy_text`, `open_url`, `noop`). Abrir URL usa IPC `desktop:open-external` com validação **https** e allowlist de hostnames — defina a mesma variável que o backend, `PLAYBOOK_URL_ALLOWLIST` (CSV, ex. `example.com,docs.google.com`), no ambiente do processo Electron. Lista vazia bloqueia todas as URLs. Copiar texto usa `navigator.clipboard` com fallback `execCommand`.
 
 ### Ancoragem do overlay ao Meet (Chrome externo)
 

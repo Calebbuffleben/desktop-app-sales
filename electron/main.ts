@@ -8,6 +8,10 @@ import { promisify } from "node:util";
 import updater from "electron-updater";
 import { loadDesktopConfig } from "../src/shared/desktop-config.ts";
 import {
+  isHttpsUrlAllowedForPlaybook,
+  parsePlaybookUrlAllowlistEnv,
+} from "../src/shared/playbook-url-allowlist.ts";
+import {
   buildEgressAudioWsUrl,
   buildPcm16SilentFrame,
   getEgressDefaults,
@@ -40,6 +44,11 @@ type UpdateStatus =
   | "error";
 type PermissionKind = "microphone" | "screen" | "accessibility";
 const initialConfig = loadDesktopConfig({ baseDir: app.getAppPath() });
+
+/** Same CSV env as backend `PLAYBOOK_URL_ALLOWLIST`; used only for overlay “open link” actions. */
+const playbookExternalUrlAllowlist = parsePlaybookUrlAllowlistEnv(
+  process.env.PLAYBOOK_URL_ALLOWLIST,
+);
 
 const appState = {
   captureStatus: "idle" as CaptureStatus,
@@ -528,6 +537,32 @@ function registerIpcHandlers(): void {
     },
   );
 
+  ipcMain.handle(
+    "desktop:open-external",
+    async (_event, payload?: { url?: string }) => {
+      const raw = typeof payload?.url === "string" ? payload.url.trim() : "";
+      if (!raw || !isHttpsUrlAllowedForPlaybook(raw, playbookExternalUrlAllowlist)) {
+        addLog(`open-external blocked | url=${raw.slice(0, 96)}`);
+        return { ok: false as const, error: "blocked_or_invalid" };
+      }
+      try {
+        await shell.openExternal(raw);
+        let host = "";
+        try {
+          host = new URL(raw).hostname;
+        } catch {
+          host = "";
+        }
+        addLog(`open-external ok | host=${host}`);
+        return { ok: true as const };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        addLog(`open-external error: ${msg}`);
+        return { ok: false as const, error: msg };
+      }
+    },
+  );
+
   ipcMain.handle("desktop:get-permission-policy", async () => {
     const platform = process.platform;
     const microphoneStatus =
@@ -950,6 +985,27 @@ function registerIpcHandlers(): void {
   ipcMain.handle("billing:upgrade", async (_event, payload?: Record<string, unknown>) => {
     const plan = ensureStringField(payload?.plan, "plan");
     return authedJson("POST", "/billing/upgrade", { plan });
+  });
+
+  ipcMain.handle("playbooks:list", async () => authedJson("GET", "/playbooks"));
+
+  ipcMain.handle("playbooks:create", async (_event, payload?: Record<string, unknown>) => {
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+      throw new Error("playbooks:create requires a JSON body object");
+    }
+    return authedJson("POST", "/playbooks", payload);
+  });
+
+  ipcMain.handle("playbooks:update", async (_event, payload?: Record<string, unknown>) => {
+    const id = ensureStringField(payload?.id, "id");
+    const rest = { ...(payload ?? {}) };
+    delete rest.id;
+    return authedJson("PATCH", `/playbooks/${encodeURIComponent(id)}`, rest);
+  });
+
+  ipcMain.handle("playbooks:remove", async (_event, payload?: Record<string, unknown>) => {
+    const id = ensureStringField(payload?.id, "id");
+    return authedJson("DELETE", `/playbooks/${encodeURIComponent(id)}`);
   });
 }
 

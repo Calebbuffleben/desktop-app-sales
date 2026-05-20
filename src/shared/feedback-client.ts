@@ -1,5 +1,16 @@
 import { io, Socket } from "socket.io-client";
 
+import type { FeedbackPlaybookMetadata } from "./playbook-metadata";
+import { parseFeedbackPlaybookMetadata } from "./playbook-metadata";
+
+/**
+ * Socket.IO `metadata` object on feedback events. Extra keys are allowed at runtime;
+ * `playbook` is validated server-side and echoed here when resolved.
+ */
+export type FeedbackMetadata = Record<string, unknown> & {
+  playbook?: FeedbackPlaybookMetadata;
+};
+
 export type FeedbackPayload = {
   id?: string;
   meetingId?: string;
@@ -9,7 +20,9 @@ export type FeedbackPayload = {
   ts?: number | string;
   message?: string;
   tips?: string[];
-  metadata?: Record<string, unknown>;
+  metadata?: FeedbackMetadata;
+  /** Parsed from `metadata.playbook` when present and valid (Passo 0 contract). */
+  playbook?: FeedbackPlaybookMetadata;
 };
 
 export type FeedbackClientOptions = {
@@ -41,14 +54,15 @@ export type FeedbackConnectionState = {
   lastLatencyMs?: number;
 };
 
-function normalizeRecentPayload(event: Record<string, unknown>): FeedbackPayload {
+function normalizeFeedbackPayload(event: Record<string, unknown>): FeedbackPayload {
   const metadata =
     event.metadata && typeof event.metadata === "object"
-      ? (event.metadata as Record<string, unknown>)
+      ? (event.metadata as FeedbackMetadata)
       : undefined;
   const tips = Array.isArray(metadata?.tips)
     ? (metadata?.tips as string[])
     : [];
+  const playbook = metadata ? parseFeedbackPlaybookMetadata(metadata.playbook) : undefined;
 
   return {
     id: typeof event.id === "string" ? event.id : undefined,
@@ -64,6 +78,7 @@ function normalizeRecentPayload(event: Record<string, unknown>): FeedbackPayload
     message: typeof event.message === "string" ? event.message : "",
     tips,
     metadata,
+    ...(playbook ? { playbook } : {}),
   };
 }
 
@@ -159,7 +174,7 @@ export class DesktopFeedbackClient {
           if (id) {
             this.seenIds.add(id);
           } else {
-            const normalized = normalizeRecentPayload(event);
+            const normalized = normalizeFeedbackPayload(event);
             const key = `${String(normalized.ts || "")}|${normalized.type || ""}|${normalized.message || ""}`;
             this.seenKeys.add(key);
           }
@@ -170,7 +185,7 @@ export class DesktopFeedbackClient {
       }
 
       for (const event of ordered) {
-        this.handleIncoming(normalizeRecentPayload(event));
+        this.handleIncoming(normalizeFeedbackPayload(event));
       }
     } catch (error) {
       this.status(
@@ -255,7 +270,7 @@ export class DesktopFeedbackClient {
       this.stopPolling();
       if (Array.isArray(payload?.recent)) {
         for (const event of payload.recent) {
-          const normalized = normalizeRecentPayload(event);
+          const normalized = normalizeFeedbackPayload(event);
           const eventId = normalized.id ? String(normalized.id) : "";
           if (eventId) {
             this.seenIds.add(eventId);
@@ -267,8 +282,12 @@ export class DesktopFeedbackClient {
       }
     });
 
-    this.socket.on("feedback", (payload: FeedbackPayload) => {
-      this.handleIncoming(payload);
+    this.socket.on("feedback", (payload: unknown) => {
+      const raw =
+        payload && typeof payload === "object" && !Array.isArray(payload)
+          ? (payload as Record<string, unknown>)
+          : {};
+      this.handleIncoming(normalizeFeedbackPayload(raw));
     });
 
     this.socket.on("disconnect", () => {
