@@ -25,7 +25,7 @@ function AcceptInviteScreen() {
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
   const [backendHttpBase, setBackendHttpBase] = useState(
-    "http://localhost:3001",
+    "https://backend-analysis-production-a688.up.railway.app",
   );
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);

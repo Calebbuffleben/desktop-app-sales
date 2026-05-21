@@ -22,7 +22,7 @@ function LoginScreen() {
   const [tenantSlug, setTenantSlug] = useState("");
   const [tenantName, setTenantName] = useState("");
   const [displayName, setDisplayName] = useState("");
-  const [backendHttpBase, setBackendHttpBase] = useState("http://localhost:3001");
+  const [backendHttpBase, setBackendHttpBase] = useState("https://backend-analysis-production-a688.up.railway.app");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
