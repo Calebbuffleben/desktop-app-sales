@@ -245,7 +245,7 @@ export default function OverlayPage() {
   const { session } = useAuth();
   const [captureStatus, setCaptureStatus] = useState<CaptureStatus>("idle");
   const [meetingId, setMeetingId] = useState("abc-defg-hij");
-  const [feedbackHttpBase, setFeedbackHttpBase] = useState("http://localhost:3001");
+  const [feedbackHttpBase, setFeedbackHttpBase] = useState("https://backend-analysis-production-a688.up.railway.app");
   const [statusLine, setStatusLine] = useState("inicializando feedback…");
   const [items, setItems] = useState<OverlayItem[]>([]);
   const [isDismissed, setIsDismissed] = useState(false);
@@ -256,7 +256,7 @@ export default function OverlayPage() {
     void window.desktopApi.getState().then((state) => {
       setCaptureStatus(state.captureStatus);
       setMeetingId(state.meetingId || "abc-defg-hij");
-      setFeedbackHttpBase(state.feedbackHttpBase || "http://localhost:3001");
+      setFeedbackHttpBase(state.feedbackHttpBase || "https://backend-analysis-production-a688.up.railway.app");
     });
     const unsubscribe = window.desktopApi.onFeedbackContextUpdated((payload) => {
       setMeetingId(payload.meetingId);

@@ -133,7 +133,7 @@ function HomeAuthenticated() {
   const [validationResult, setValidationResult] = useState("");
   const [sourceMode, setSourceMode] = useState<AudioSourceMode>("auto");
   const [captureDetails, setCaptureDetails] = useState("");
-  const [feedbackBase, setFeedbackBase] = useState("http://localhost:3001");
+  const [feedbackBase, setFeedbackBase] = useState("https://backend-analysis-production-a688.up.railway.app");
   const [anchorMode, setAnchorMode] = useState<"fixed" | "meet-window">("fixed");
   const [debugLogs, setDebugLogs] = useState(false);
   const [forcePolling, setForcePolling] = useState(false);
@@ -237,7 +237,7 @@ function HomeAuthenticated() {
         setLogs(state.logs);
         setMeetingId(state.meetingId || "");
         setFeedbackBase(
-          session.backendHttpBase || state.feedbackHttpBase || "http://localhost:3001",
+          session.backendHttpBase || state.feedbackHttpBase || "https://backend-analysis-production-a688.up.railway.app",
         );
         setAnchorMode(state.anchorMode);
         setSelectedSourceId(state.selectedSourceId || "");
