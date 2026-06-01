@@ -671,6 +671,10 @@ function registerIpcHandlers(): void {
     const sampleRate =
       typeof payload?.sampleRate === "number" ? payload.sampleRate : defaults.sampleRate;
     const channels = typeof payload?.channels === "number" ? payload.channels : defaults.channels;
+    const participantRole =
+      typeof payload?.participantRole === "string"
+        ? payload.participantRole
+        : defaults.participantRole;
 
     const wsUrl = buildEgressAudioWsUrl({
       baseWs: defaults.baseWs,
@@ -678,6 +682,7 @@ function registerIpcHandlers(): void {
       meetUrl,
       meetingId,
       participant,
+      participantRole,
       track,
       sampleRate,
       channels,
@@ -699,6 +704,10 @@ function registerIpcHandlers(): void {
     const sampleRate =
       typeof payload?.sampleRate === "number" ? payload.sampleRate : defaults.sampleRate;
     const channels = typeof payload?.channels === "number" ? payload.channels : defaults.channels;
+    const participantRole =
+      typeof payload?.participantRole === "string"
+        ? payload.participantRole
+        : defaults.participantRole;
 
     // The backend enforces JWT on `/egress-audio` upgrade (see
     // `egress-audio-gateway.ts`). Pull the access token from the auth
@@ -723,6 +732,7 @@ function registerIpcHandlers(): void {
       meetUrl,
       meetingId,
       participant,
+      participantRole,
       track,
       sampleRate,
       channels,

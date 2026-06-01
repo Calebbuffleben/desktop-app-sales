@@ -20,6 +20,7 @@
     "lint": "eslint",
     "desktop:start": "NODE_ENV=production sh ./scripts/run-electron.sh",
     "desktop:validate-protocol": "tsx scripts/validate-egress-protocol.ts",
+    "desktop:test:egress-protocol": "tsx scripts/test-egress-audio-protocol.ts",
     "desktop:test:phase7": "tsx scripts/phase7-parity-check.ts",
     "pack": "pnpm build && electron-builder --dir --config electron-builder.yml",
     "dist:mac": "pnpm build && electron-builder --mac --config electron-builder.yml",

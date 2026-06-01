@@ -1,11 +1,28 @@
 import type { DesktopConfig } from "./desktop-config.js";
 
+/** Declared Meet stream role (desktop operator defaults to host). */
+export type ParticipantRole = "host" | "participant" | "unknown";
+
+const PARTICIPANT_ROLES = new Set<ParticipantRole>(["host", "participant", "unknown"]);
+
+export function normalizeParticipantRole(value?: string): ParticipantRole | undefined {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase();
+  if (PARTICIPANT_ROLES.has(normalized as ParticipantRole)) {
+    return normalized as ParticipantRole;
+  }
+  return undefined;
+}
+
 export type EgressAudioParams = {
   baseWs: string;
   egressPath: string;
   meetUrl?: string;
   meetingId?: string;
   participant?: string;
+  /** Declared role for this audio stream (desktop operator → host). */
+  participantRole?: ParticipantRole;
   track?: string;
   sampleRate?: number;
   channels?: number;
@@ -103,6 +120,10 @@ export function buildEgressAudioWsUrl(params: EgressAudioParams): string {
   if (params.tenantId) {
     url.searchParams.set("tenantId", sanitize(params.tenantId));
   }
+  const participantRole = normalizeParticipantRole(params.participantRole);
+  if (participantRole) {
+    url.searchParams.set("participantRole", participantRole);
+  }
   return url.toString();
 }
 
@@ -113,6 +134,7 @@ export function getEgressDefaults(cfg: DesktopConfig) {
     sampleRate: cfg.DEFAULT_SAMPLE_RATE,
     channels: cfg.DEFAULT_CHANNELS,
     participant: "browser",
+    participantRole: "host" as ParticipantRole,
     track: "tab-audio",
   };
 }

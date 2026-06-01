@@ -1,0 +1,42 @@
+import assert from "node:assert/strict";
+import {
+  buildEgressAudioWsUrl,
+  getEgressDefaults,
+  normalizeParticipantRole,
+} from "../src/shared/egress-audio-protocol";
+import { loadDesktopConfig } from "../src/shared/desktop-config";
+
+function run(): void {
+  const cfg = loadDesktopConfig();
+  const defaults = getEgressDefaults(cfg);
+
+  assert.equal(defaults.participantRole, "host");
+  assert.equal(normalizeParticipantRole("HOST"), "host");
+  assert.equal(normalizeParticipantRole("bad"), undefined);
+
+  const wsUrl = buildEgressAudioWsUrl({
+    baseWs: defaults.baseWs,
+    egressPath: defaults.egressPath,
+    meetUrl: "https://meet.google.com/abc-defg-hij",
+    participant: "operator-1",
+    participantRole: "host",
+    track: defaults.track,
+    sampleRate: defaults.sampleRate,
+    channels: defaults.channels,
+  });
+
+  const parsed = new URL(wsUrl);
+  assert.equal(parsed.searchParams.get("participantRole"), "host");
+  assert.equal(parsed.searchParams.get("participant"), "operator-1");
+
+  const withoutRole = buildEgressAudioWsUrl({
+    baseWs: defaults.baseWs,
+    egressPath: defaults.egressPath,
+    meetUrl: "https://meet.google.com/abc-defg-hij",
+  });
+  assert.equal(new URL(withoutRole).searchParams.get("participantRole"), null);
+
+  console.log("[test-egress-audio-protocol] ok");
+}
+
+run();

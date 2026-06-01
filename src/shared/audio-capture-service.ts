@@ -1,4 +1,7 @@
-import { buildEgressAudioWsUrl } from "./egress-audio-protocol";
+import {
+  buildEgressAudioWsUrl,
+  type ParticipantRole,
+} from "./egress-audio-protocol";
 import type { DesktopConfig } from "./desktop-config";
 
 const FRAME_MS = 20;
@@ -14,6 +17,8 @@ export type StartCaptureInput = {
   meetUrl?: string;
   meetingId?: string;
   participant?: string;
+  /** Declared stream role; defaults to host (desktop operator / seller). */
+  participantRole?: ParticipantRole;
   track?: string;
   sourceMode: AudioSourceMode;
   debug?: boolean;
@@ -184,6 +189,7 @@ export class DesktopAudioCaptureService {
     meetUrl?: string;
     meetingId?: string;
     participant: string;
+    participantRole: ParticipantRole;
     track: string;
     sampleRate: number;
     channels: number;
@@ -504,6 +510,7 @@ export class DesktopAudioCaptureService {
       meetUrl: input.meetUrl,
       meetingId: input.meetingId,
       participant: input.participant || "desktop",
+      participantRole: input.participantRole ?? "host",
       track: input.track || "desktop-audio",
       sampleRate: targetSampleRate,
       channels,

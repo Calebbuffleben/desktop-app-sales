@@ -346,11 +346,14 @@ function HomeAuthenticated() {
     try {
       setCaptureError(null);
       const tenantId = session.tenant.id;
+      const operatorParticipant =
+        participant.trim() || session.user?.id || "desktop";
       const result = await captureService.start({
         config,
         meetUrl,
         meetingId: meetingId || undefined,
-        participant,
+        participant: operatorParticipant,
+        participantRole: "host",
         track,
         sourceMode,
         debug: debugLogs,
@@ -629,6 +632,7 @@ function HomeAuthenticated() {
               <span className={pill}>Bridge: {isBridgeAvailable ? "ok" : "indisponivel"}</span>
               <span className={pill}>Anchor: {anchorMode === "meet-window" ? "meet-window" : "fixed"}</span>
               <span className={pill}>Meet: {anchorMode === "meet-window" ? "detectada" : "—"}</span>
+              <span className={pill}>Papel: host (operador)</span>
             </div>
 
             <div className="mb-4 grid grid-cols-1 gap-3 md:grid-cols-2">
