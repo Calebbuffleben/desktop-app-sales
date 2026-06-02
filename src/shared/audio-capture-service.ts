@@ -17,7 +17,7 @@ export type StartCaptureInput = {
   meetUrl?: string;
   meetingId?: string;
   participant?: string;
-  /** Declared stream role; defaults to host (desktop operator / seller). */
+  /** Declared stream role; microphone defaults to host, system audio to participant. */
   participantRole?: ParticipantRole;
   track?: string;
   sourceMode: AudioSourceMode;
@@ -53,6 +53,12 @@ export type AudioMeter = {
 
 type ResolvedSource = "microphone" | "system" | "mixed";
 
+function defaultRoleForSourceMode(sourceMode: AudioSourceMode): ParticipantRole {
+  if (sourceMode === "microphone") return "host";
+  if (sourceMode === "system") return "participant";
+  return "unknown";
+}
+
 function detectPlatform(): CapturePlatform {
   if (typeof navigator === "undefined") return "unknown";
   const raw = `${navigator.userAgent} ${navigator.platform}`.toLowerCase();
@@ -71,7 +77,7 @@ function pcmFloatToInt16(float32: Float32Array): Int16Array {
   return out;
 }
 
-function rmsOfFloat32(buffer: Float32Array): number {
+function rmsOfFloat32(buffer: Float32Array<ArrayBufferLike>): number {
   if (buffer.length === 0) return 0;
   let sum = 0;
   for (let i = 0; i < buffer.length; i += 1) {
@@ -153,6 +159,8 @@ export class DesktopAudioCaptureService {
   private ws: WebSocket | null = null;
   private micStream: MediaStream | null = null;
   private loopbackStream: MediaStream | null = null;
+  /** macOS ScreenCaptureKit keeps loopback alive while a video track is active. */
+  private systemVideoTracks: MediaStreamTrack[] = [];
   private micSourceNode: MediaStreamAudioSourceNode | null = null;
   private loopbackSourceNode: MediaStreamAudioSourceNode | null = null;
   private micGainNode: GainNode | null = null;
@@ -167,9 +175,9 @@ export class DesktopAudioCaptureService {
     mixed?: AnalyserNode;
   } = {};
   private meterIntervalId: ReturnType<typeof setInterval> | null = null;
-  private micMeterBuffer: Float32Array | null = null;
-  private loopbackMeterBuffer: Float32Array | null = null;
-  private mixedMeterBuffer: Float32Array | null = null;
+  private micMeterBuffer: Float32Array<ArrayBuffer> | null = null;
+  private loopbackMeterBuffer: Float32Array<ArrayBuffer> | null = null;
+  private mixedMeterBuffer: Float32Array<ArrayBuffer> | null = null;
   private mixedRmsOverride: number | null = null;
   private silentSink: GainNode | null = null;
   private audioContext: AudioContext | null = null;
@@ -404,7 +412,39 @@ export class DesktopAudioCaptureService {
     });
   }
 
+  private async assertLoopbackReadiness(): Promise<void> {
+    const api =
+      typeof window !== "undefined" ? window.desktopApi : undefined;
+    if (!api?.checkCaptureReadiness) return;
+    const readiness = await api.checkCaptureReadiness();
+    if (readiness.platform !== "darwin" || readiness.ok) return;
+    const detail =
+      readiness.notes.length > 0
+        ? readiness.notes.join(" ")
+        : "Verifique Gravacao de Tela e macOS 13+.";
+    throw new Error(`Captura loopback indisponivel: ${detail}`);
+  }
+
+  private loopbackFailureMessage(): string {
+    const platform = detectPlatform();
+    const devHint =
+      typeof window !== "undefined" &&
+      window.desktopApi &&
+      platform === "macos"
+        ? " Em dev, habilite Gravacao de Tela para Electron em Ajustes do Sistema."
+        : "";
+    if (platform === "macos") {
+      return (
+        "Nenhum track de audio retornado do getDisplayMedia. No macOS, conceda Gravacao de Tela " +
+        `(Ajustes > Privacidade), use macOS 13+, selecione a janela do Meet em Fonte de loopback ` +
+        `e reinicie o app apos mudar a permissao.${devHint}`
+      );
+    }
+    return "Nenhum track de audio retornado do getDisplayMedia.";
+  }
+
   private async openSystemAudio(): Promise<MediaStream> {
+    await this.assertLoopbackReadiness();
     const displayStream = await navigator.mediaDevices.getDisplayMedia({
       video: true,
       audio: true,
@@ -412,12 +452,18 @@ export class DesktopAudioCaptureService {
     const audioTracks = displayStream.getAudioTracks();
     if (audioTracks.length === 0) {
       displayStream.getTracks().forEach((track) => track.stop());
-      throw new Error(
-        "Nenhum track de audio retornado do getDisplayMedia. No macOS, confirme se a permissao de Gravacao de Tela esta concedida e se macOS>=13.",
-      );
+      throw new Error(this.loopbackFailureMessage());
     }
     const audioOnlyStream = new MediaStream(audioTracks);
-    displayStream.getVideoTracks().forEach((track) => track.stop());
+    const videoTracks = displayStream.getVideoTracks();
+    if (detectPlatform() === "macos" && videoTracks.length > 0) {
+      this.systemVideoTracks = videoTracks;
+      for (const track of videoTracks) {
+        track.enabled = false;
+      }
+    } else {
+      videoTracks.forEach((track) => track.stop());
+    }
     return audioOnlyStream;
   }
 
@@ -513,7 +559,7 @@ export class DesktopAudioCaptureService {
       meetUrl: input.meetUrl,
       meetingId: input.meetingId,
       participant: input.participant || "desktop",
-      participantRole: input.participantRole ?? "host",
+      participantRole: input.participantRole ?? defaultRoleForSourceMode(input.sourceMode),
       track: input.track || "desktop-audio",
       sampleRate: targetSampleRate,
       channels,
@@ -767,6 +813,10 @@ export class DesktopAudioCaptureService {
     }
     if (this.loopbackStream) {
       this.loopbackStream.getTracks().forEach((track) => track.stop());
+    }
+    if (this.systemVideoTracks.length > 0) {
+      this.systemVideoTracks.forEach((track) => track.stop());
+      this.systemVideoTracks = [];
     }
     if (this.audioContext) {
       try {

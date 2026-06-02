@@ -28,6 +28,7 @@ mac:
   entitlementsInherit: build/entitlements.mac.plist
   extendInfo:
     NSMicrophoneUsageDescription: Captura de microfone para análise de reuniões.
+    NSScreenCaptureUsageDescription: Captura de áudio da janela do Meet (loopback) para análise da fala do cliente.
 win:
   target:
     - nsis

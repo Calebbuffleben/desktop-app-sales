@@ -70,13 +70,13 @@ Captura de áudio desktop com envio PCM em tempo real:
 
 ### Matriz MVP cross-platform
 
-- **macOS**: prioridade microfone; loopback opcional com dispositivo virtual (BlackHole/Loopback).
+- **macOS**: loopback nativo via `setDisplayMediaRequestHandler` + `audio: loopback` (macOS 13+, Electron 28+). Requer **Gravação de Tela** em Ajustes do Sistema. Em `pnpm dev`, a permissão costuma ser para **Electron**, não para Meet Desktop empacotado — reinicie o app após conceder.
 - **Windows**: prioridade loopback/WASAPI quando disponível (`getDisplayMedia` com áudio), fallback para microfone.
 - **Linux**: prioridade captura de sistema via PulseAudio/PipeWire (`getDisplayMedia` com áudio), fallback para microfone.
 
 ### Integração Electron para áudio de sistema
 
-No processo principal (`electron/main.ts`) o `setDisplayMediaRequestHandler` foi configurado para permitir captura de tela/janela com `audio: \"loopback\"`, habilitando tentativa de system audio no renderer.
+No processo principal (`electron/main.ts`) o `setDisplayMediaRequestHandler` seleciona a janela do Meet (ou fonte manual) com `audio: \"loopback\"`. No macOS o picker nativo fica desligado (`useSystemPicker: false`) para não depender da caixa \"compartilhar áudio do computador\".
 
 ## Fase 4 implementada
 

@@ -12,7 +12,7 @@ function run(): void {
   const cfg = loadDesktopConfig();
   const defaults = getEgressDefaults(cfg);
 
-  assert.equal(defaults.participantRole, "host");
+  assert.equal(defaults.participantRole, "participant");
   assert.equal(normalizeParticipantRole("HOST"), "host");
   assert.equal(normalizeParticipantRole("bad"), undefined);
 
@@ -30,6 +30,18 @@ function run(): void {
   const parsed = new URL(wsUrl);
   assert.equal(parsed.searchParams.get("participantRole"), "host");
   assert.equal(parsed.searchParams.get("participant"), "operator-1");
+
+  const remoteWsUrl = buildEgressAudioWsUrl({
+    baseWs: defaults.baseWs,
+    egressPath: defaults.egressPath,
+    meetUrl: "https://meet.google.com/abc-defg-hij",
+    participant: "meet-remote",
+    participantRole: defaults.participantRole,
+    track: defaults.track,
+    sampleRate: defaults.sampleRate,
+    channels: defaults.channels,
+  });
+  assert.equal(new URL(remoteWsUrl).searchParams.get("participantRole"), "participant");
 
   const withoutRole = buildEgressAudioWsUrl({
     baseWs: defaults.baseWs,

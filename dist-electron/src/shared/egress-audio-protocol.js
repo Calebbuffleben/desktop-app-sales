@@ -126,7 +126,7 @@ export function getEgressDefaults(cfg) {
         sampleRate: cfg.DEFAULT_SAMPLE_RATE,
         channels: cfg.DEFAULT_CHANNELS,
         participant: "browser",
-        participantRole: "host",
+        participantRole: "participant",
         track: "tab-audio",
     };
 }

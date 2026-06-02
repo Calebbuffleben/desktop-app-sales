@@ -1,6 +1,6 @@
 import type { DesktopConfig } from "./desktop-config.js";
 
-/** Declared Meet stream role (desktop operator defaults to host). */
+/** Declared stream role. Host is local microphone; participant is remote Meet audio. */
 export type ParticipantRole = "host" | "participant" | "unknown";
 
 const PARTICIPANT_ROLES = new Set<ParticipantRole>(["host", "participant", "unknown"]);
@@ -21,7 +21,7 @@ export type EgressAudioParams = {
   meetUrl?: string;
   meetingId?: string;
   participant?: string;
-  /** Declared role for this audio stream (desktop operator → host). */
+  /** Declared role for this audio stream. */
   participantRole?: ParticipantRole;
   track?: string;
   sampleRate?: number;
@@ -160,7 +160,7 @@ export function getEgressDefaults(cfg: DesktopConfig) {
     sampleRate: cfg.DEFAULT_SAMPLE_RATE,
     channels: cfg.DEFAULT_CHANNELS,
     participant: "browser",
-    participantRole: "host" as ParticipantRole,
+    participantRole: "participant" as ParticipantRole,
     track: "tab-audio",
   };
 }

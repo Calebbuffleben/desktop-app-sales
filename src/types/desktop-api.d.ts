@@ -39,10 +39,13 @@ export type DisplaySource = {
 export type CaptureReadiness = {
   ok: boolean;
   platform: string;
+  appName?: string;
+  isPackaged?: boolean;
   macosVersion?: string;
   macosMajor?: number;
   microphoneStatus: string;
   screenStatus: string;
+  displaySourceCount?: number;
   missing: Array<"macos-version" | "microphone" | "screen">;
   notes: string[];
 };

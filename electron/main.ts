@@ -419,7 +419,7 @@ function registerIpcHandlers(): void {
     };
   });
 
-  ipcMain.handle("desktop:check-capture-readiness", () => {
+  ipcMain.handle("desktop:check-capture-readiness", async () => {
     const platform = process.platform;
     const microphoneStatus =
       typeof systemPreferences.getMediaAccessStatus === "function"
@@ -433,12 +433,32 @@ function registerIpcHandlers(): void {
       platform === "darwin" ? parseMacosMajor(os.release()) : undefined;
     const missing: Array<"macos-version" | "microphone" | "screen"> = [];
     const notes: string[] = [];
+    let displaySourceCount: number | undefined;
     if (platform === "darwin") {
       if (!macosMajor || macosMajor < 13) {
         missing.push("macos-version");
         notes.push(
           `macOS detectado: ${macosMajor ?? "?"}. Loopback nativo do Electron requer macOS 13+`,
         );
+      }
+      if (!app.isPackaged) {
+        notes.push(
+          `Modo dev: em Ajustes > Privacidade > Gravacao de Tela, habilite "${app.getName()}" (geralmente Electron), nao apenas Meet Desktop.`,
+        );
+      }
+      try {
+        const sources = await desktopCapturer.getSources({
+          types: ["screen", "window"],
+        });
+        displaySourceCount = sources.length;
+        if (screenStatus === "granted" && sources.length === 0) {
+          notes.push(
+            "Gravacao de Tela concedida, mas nenhuma fonte listada. Feche e reabra o app apos alterar a permissao.",
+          );
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        notes.push(`desktopCapturer indisponivel: ${message}`);
       }
     }
     if (microphoneStatus !== "granted") {
@@ -454,10 +474,13 @@ function registerIpcHandlers(): void {
     return {
       ok: missing.length === 0,
       platform,
+      appName: app.getName(),
+      isPackaged: app.isPackaged,
       macosVersion: platform === "darwin" ? os.release() : undefined,
       macosMajor,
       microphoneStatus,
       screenStatus,
+      displaySourceCount,
       missing,
       notes,
     };
@@ -625,7 +648,17 @@ function registerIpcHandlers(): void {
         await shell.openExternal(
           "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
         );
-        addLog("Opened macOS Screen Recording settings");
+        try {
+          const sources = await desktopCapturer.getSources({
+            types: ["screen", "window"],
+          });
+          addLog(
+            `Opened macOS Screen Recording settings | desktopCapturer sources=${sources.length}`,
+          );
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          addLog(`Opened macOS Screen Recording settings | probe failed: ${message}`);
+        }
         return { ok: true, kind, granted: null };
       }
       addLog(`Permission request (${kind}) delegated to OS/browser prompt`);
@@ -1128,7 +1161,7 @@ app.whenReady().then(async () => {
             }) || sources[0];
         }
         addLog(
-          `displayMedia: fonte selecionada id=${selected.id} | name=${selected.name}`,
+          `displayMedia: fonte selecionada id=${selected.id} | name=${selected.name} | audio=loopback`,
         );
         callback({
           video: selected,
@@ -1140,7 +1173,9 @@ app.whenReady().then(async () => {
         callback({});
       }
     },
-    { useSystemPicker: true },
+    // macOS: picker nativo exige marcar "compartilhar audio do computador";
+    // handler automatico + loopback evita tracks de audio vazios.
+    { useSystemPicker: process.platform !== "darwin" },
   );
 
   registerIpcHandlers();
