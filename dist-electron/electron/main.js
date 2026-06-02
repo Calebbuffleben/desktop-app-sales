@@ -6,8 +6,9 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import updater from "electron-updater";
 import { loadDesktopConfig } from "../src/shared/desktop-config.js";
-import { buildEgressAudioWsUrl, buildPcm16SilentFrame, getEgressDefaults, wsToHttpBase, } from "../src/shared/egress-audio-protocol.js";
+import { buildEgressAudioWsUrl, buildPcm16SilentFrame, getEgressDefaults, httpBaseToWsBase, normalizeParticipantRole, wsToHttpBase, } from "../src/shared/egress-audio-protocol.js";
 import WebSocket from "ws";
+import { DesktopAuthService } from "./auth-service.js";
 const { app, BrowserWindow, desktopCapturer, ipcMain, screen, session, shell, systemPreferences, } = electron;
 const { autoUpdater } = updater;
 const initialConfig = loadDesktopConfig({ baseDir: app.getAppPath() });
@@ -28,11 +29,82 @@ const appState = {
 };
 let controlWindow = null;
 let overlayWindow = null;
+const authService = new DesktopAuthService();
+function broadcastAuthSession(snapshot) {
+    if (controlWindow && !controlWindow.isDestroyed()) {
+        controlWindow.webContents.send("auth:session-updated", snapshot);
+    }
+}
+function broadcastFeedbackContext() {
+    if (overlayWindow && !overlayWindow.isDestroyed()) {
+        overlayWindow.webContents.send("desktop:feedback-context-updated", {
+            meetingId: appState.meetingId,
+            feedbackHttpBase: appState.feedbackHttpBase,
+        });
+    }
+}
+function syncFeedbackHttpBaseFromAuth(httpBase) {
+    if (!httpBase)
+        return;
+    appState.feedbackHttpBase = httpBase;
+    registerBackendConnectOrigins(httpBase);
+    broadcastFeedbackContext();
+}
+authService.on("session-updated", (snapshot) => {
+    syncFeedbackHttpBaseFromAuth(snapshot.backendHttpBase);
+    broadcastAuthSession(snapshot);
+    addLog(`Auth session updated | authenticated=${snapshot.isAuthenticated} | tenant=${snapshot.tenant?.slug || "n/a"}`);
+});
+authService.on("persistence-error", (message) => {
+    addLog(`Auth persistence warning | ${message}`);
+});
+function ensureStringField(value, field) {
+    if (typeof value !== "string" || value.trim() === "") {
+        throw new Error(`missing field: ${field}`);
+    }
+    return value;
+}
+function sanitizeBackendBase(raw) {
+    const value = ensureStringField(raw, "backendHttpBase");
+    try {
+        const parsed = new URL(value);
+        if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+            throw new Error("backendHttpBase must be http(s)");
+        }
+        return parsed.origin;
+    }
+    catch (err) {
+        throw new Error(`invalid backendHttpBase: ${err instanceof Error ? err.message : String(err)}`);
+    }
+}
 const isDev = !app.isPackaged;
 const devServerUrl = process.env.NEXT_DEV_SERVER_URL ?? "http://localhost:3210";
 const execFileAsync = promisify(execFile);
 let overlayAnchorTimer = null;
 let activeWinModule = null;
+/** Mutable connect-src allowlist for renderer CSP (updated when auth backend changes). */
+const allowedConnectOrigins = new Set([
+    "'self'",
+    "http://localhost:3001",
+    "ws://localhost:3001",
+]);
+function registerBackendConnectOrigins(httpBase) {
+    try {
+        const httpUrl = new URL(httpBase);
+        allowedConnectOrigins.add(httpUrl.origin);
+        const wsUrl = new URL(httpBaseToWsBase(httpBase));
+        allowedConnectOrigins.add(wsUrl.origin);
+    }
+    catch {
+        /* ignore malformed backend base */
+    }
+}
+try {
+    registerBackendConnectOrigins(wsToHttpBase(initialConfig.BACKEND_WS_BASE));
+}
+catch {
+    /* ignore */
+}
 function isAllowedRendererUrl(target) {
     if (isDev)
         return target.startsWith(devServerUrl);
@@ -93,24 +165,23 @@ function setOverlayWindowVisible(visible) {
         overlayWindow.hide();
     }
 }
+const OVERLAY_WIDTH = 380;
+/** Tall enough for stacked tip toasts (see overlay/page.tsx). */
+const OVERLAY_HEIGHT = 520;
 function ensureOverlayPosition() {
     if (!overlayWindow || overlayWindow.isDestroyed())
         return;
     const { workArea } = screen.getPrimaryDisplay();
-    const width = 380;
-    const height = 220;
-    const x = Math.round(workArea.x + workArea.width - width - 24);
+    const x = Math.round(workArea.x + workArea.width - OVERLAY_WIDTH - 24);
     const y = Math.round(workArea.y + 24);
-    overlayWindow.setBounds({ x, y, width, height });
+    overlayWindow.setBounds({ x, y, width: OVERLAY_WIDTH, height: OVERLAY_HEIGHT });
 }
 function positionOverlayFromAnchor(bounds) {
     if (!overlayWindow || overlayWindow.isDestroyed())
         return;
-    const width = 380;
-    const height = 240;
-    const x = Math.round(bounds.x + bounds.width - width - 18);
+    const x = Math.round(bounds.x + bounds.width - OVERLAY_WIDTH - 18);
     const y = Math.round(bounds.y + 18);
-    overlayWindow.setBounds({ x, y, width, height });
+    overlayWindow.setBounds({ x, y, width: OVERLAY_WIDTH, height: OVERLAY_HEIGHT });
 }
 async function getMeetBoundsFromMacChrome() {
     try {
@@ -223,8 +294,8 @@ async function createWindows() {
         },
     });
     overlayWindow = new BrowserWindow({
-        width: 380,
-        height: 220,
+        width: OVERLAY_WIDTH,
+        height: OVERLAY_HEIGHT,
         show: false,
         frame: false,
         transparent: true,
@@ -297,7 +368,7 @@ function registerIpcHandlers() {
             update: appState.update,
         };
     });
-    ipcMain.handle("desktop:check-capture-readiness", () => {
+    ipcMain.handle("desktop:check-capture-readiness", async () => {
         const platform = process.platform;
         const microphoneStatus = typeof systemPreferences.getMediaAccessStatus === "function"
             ? systemPreferences.getMediaAccessStatus("microphone")
@@ -308,10 +379,27 @@ function registerIpcHandlers() {
         const macosMajor = platform === "darwin" ? parseMacosMajor(os.release()) : undefined;
         const missing = [];
         const notes = [];
+        let displaySourceCount;
         if (platform === "darwin") {
             if (!macosMajor || macosMajor < 13) {
                 missing.push("macos-version");
                 notes.push(`macOS detectado: ${macosMajor ?? "?"}. Loopback nativo do Electron requer macOS 13+`);
+            }
+            if (!app.isPackaged) {
+                notes.push(`Modo dev: em Ajustes > Privacidade > Gravacao de Tela, habilite "${app.getName()}" (geralmente Electron), nao apenas Meet Desktop.`);
+            }
+            try {
+                const sources = await desktopCapturer.getSources({
+                    types: ["screen", "window"],
+                });
+                displaySourceCount = sources.length;
+                if (screenStatus === "granted" && sources.length === 0) {
+                    notes.push("Gravacao de Tela concedida, mas nenhuma fonte listada. Feche e reabra o app apos alterar a permissao.");
+                }
+            }
+            catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                notes.push(`desktopCapturer indisponivel: ${message}`);
             }
         }
         if (microphoneStatus !== "granted") {
@@ -325,10 +413,13 @@ function registerIpcHandlers() {
         return {
             ok: missing.length === 0,
             platform,
+            appName: app.getName(),
+            isPackaged: app.isPackaged,
             macosVersion: platform === "darwin" ? os.release() : undefined,
             macosMajor,
             microphoneStatus,
             screenStatus,
+            displaySourceCount,
             missing,
             notes,
         };
@@ -466,7 +557,16 @@ function registerIpcHandlers() {
         }
         if (kind === "screen" && process.platform === "darwin") {
             await shell.openExternal("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture");
-            addLog("Opened macOS Screen Recording settings");
+            try {
+                const sources = await desktopCapturer.getSources({
+                    types: ["screen", "window"],
+                });
+                addLog(`Opened macOS Screen Recording settings | desktopCapturer sources=${sources.length}`);
+            }
+            catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                addLog(`Opened macOS Screen Recording settings | probe failed: ${message}`);
+            }
             return { ok: true, kind, granted: null };
         }
         addLog(`Permission request (${kind}) delegated to OS/browser prompt`);
@@ -541,12 +641,16 @@ function registerIpcHandlers() {
         const track = typeof payload?.track === "string" ? payload.track : defaults.track;
         const sampleRate = typeof payload?.sampleRate === "number" ? payload.sampleRate : defaults.sampleRate;
         const channels = typeof payload?.channels === "number" ? payload.channels : defaults.channels;
+        const participantRole = normalizeParticipantRole(typeof payload?.participantRole === "string"
+            ? payload.participantRole
+            : defaults.participantRole) ?? defaults.participantRole;
         const wsUrl = buildEgressAudioWsUrl({
             baseWs: defaults.baseWs,
             egressPath: defaults.egressPath,
             meetUrl,
             meetingId,
             participant,
+            participantRole,
             track,
             sampleRate,
             channels,
@@ -564,18 +668,41 @@ function registerIpcHandlers() {
         const track = typeof payload?.track === "string" ? payload.track : defaults.track;
         const sampleRate = typeof payload?.sampleRate === "number" ? payload.sampleRate : defaults.sampleRate;
         const channels = typeof payload?.channels === "number" ? payload.channels : defaults.channels;
+        const participantRole = normalizeParticipantRole(typeof payload?.participantRole === "string"
+            ? payload.participantRole
+            : defaults.participantRole) ?? defaults.participantRole;
+        // The backend enforces JWT on `/egress-audio` upgrade (see
+        // `egress-audio-gateway.ts`). Pull the access token from the auth
+        // service so the diagnostic ping does not get closed with 1008.
+        let token;
+        let tenantId;
+        try {
+            const snap = authService.snapshot();
+            if (snap.isAuthenticated) {
+                token = (await authService.getAccessToken()) || undefined;
+                tenantId = snap.tenant?.id;
+            }
+        }
+        catch (err) {
+            addLog(`Protocol validation auth lookup failed | ${err instanceof Error ? err.message : String(err)}`);
+        }
         const wsUrl = buildEgressAudioWsUrl({
             baseWs: defaults.baseWs,
             egressPath: defaults.egressPath,
             meetUrl,
             meetingId,
             participant,
+            participantRole,
             track,
             sampleRate,
             channels,
+            token,
+            tenantId,
         });
         const payloadBuffer = buildPcm16SilentFrame(sampleRate, channels);
-        addLog(`Protocol validation start | ws=${wsUrl}`);
+        // Redact token from the log line — never surface raw JWTs in telemetry.
+        const loggedUrl = token ? wsUrl.replace(/token=[^&]+/, "token=***") : wsUrl;
+        addLog(`Protocol validation start | ws=${loggedUrl}${token ? "" : " (unauthenticated — backend will reject in prod)"}`);
         return new Promise((resolve) => {
             const ws = new WebSocket(wsUrl);
             let resolved = false;
@@ -654,6 +781,166 @@ function registerIpcHandlers() {
             });
         });
     });
+    ipcMain.handle("auth:login", async (_event, payload) => {
+        const email = ensureStringField(payload?.email, "email");
+        const password = ensureStringField(payload?.password, "password");
+        const backendHttpBase = sanitizeBackendBase(payload?.backendHttpBase);
+        const tenantSlug = typeof payload?.tenantSlug === "string" && payload.tenantSlug.trim() !== ""
+            ? payload.tenantSlug
+            : undefined;
+        const snapshot = await authService.login({
+            email,
+            password,
+            tenantSlug,
+            backendHttpBase,
+        });
+        return snapshot;
+    });
+    ipcMain.handle("auth:register", async (_event, payload) => {
+        const email = ensureStringField(payload?.email, "email");
+        const password = ensureStringField(payload?.password, "password");
+        const backendHttpBase = sanitizeBackendBase(payload?.backendHttpBase);
+        const tenantSlug = typeof payload?.tenantSlug === "string" && payload.tenantSlug.trim() !== ""
+            ? payload.tenantSlug
+            : undefined;
+        const tenantName = typeof payload?.tenantName === "string" && payload.tenantName.trim() !== ""
+            ? payload.tenantName
+            : undefined;
+        const name = typeof payload?.name === "string" && payload.name.trim() !== ""
+            ? payload.name
+            : undefined;
+        const snapshot = await authService.register({
+            email,
+            password,
+            tenantSlug,
+            tenantName,
+            name,
+            backendHttpBase,
+        });
+        return snapshot;
+    });
+    ipcMain.handle("auth:logout", async () => {
+        await authService.logout();
+        // Force stop capture on logout to avoid sending frames on a dead session.
+        if (appState.captureStatus === "capturing") {
+            appState.captureStatus = "idle";
+            addLog("Capture stopped due to logout");
+        }
+        return { ok: true };
+    });
+    ipcMain.handle("auth:refresh", async () => {
+        await authService.refreshAccessToken();
+        return authService.snapshot();
+    });
+    ipcMain.handle("auth:get-session", () => authService.snapshot());
+    ipcMain.handle("auth:get-access-token", async () => {
+        try {
+            return await authService.getAccessToken();
+        }
+        catch {
+            return null;
+        }
+    });
+    // ---------------------------------------------------------------------
+    // Membership / Invitations / Billing
+    //
+    // These handlers are thin pass-throughs to the backend HTTP API, but all
+    // authz lives server-side (JwtAuthGuard + RolesGuard + membership checks).
+    // The main process attaches the current session's Bearer token; renderer
+    // code never touches raw tokens.
+    // ---------------------------------------------------------------------
+    ipcMain.handle("members:list", async () => authedJson("GET", "/members"));
+    ipcMain.handle("members:update-role", async (_event, payload) => {
+        const membershipId = ensureStringField(payload?.membershipId, "membershipId");
+        const role = ensureStringField(payload?.role, "role");
+        return authedJson("PATCH", `/members/${encodeURIComponent(membershipId)}/role`, { role });
+    });
+    ipcMain.handle("members:remove", async (_event, payload) => {
+        const membershipId = ensureStringField(payload?.membershipId, "membershipId");
+        return authedJson("DELETE", `/members/${encodeURIComponent(membershipId)}`);
+    });
+    ipcMain.handle("invites:list", async () => authedJson("GET", "/invites"));
+    ipcMain.handle("invites:create", async (_event, payload) => {
+        const email = ensureStringField(payload?.email, "email");
+        const role = typeof payload?.role === "string" && payload.role.trim() !== ""
+            ? payload.role
+            : undefined;
+        return authedJson("POST", "/invites", { email, role });
+    });
+    ipcMain.handle("invites:revoke", async (_event, payload) => {
+        const invitationId = ensureStringField(payload?.invitationId, "invitationId");
+        return authedJson("DELETE", `/invites/${encodeURIComponent(invitationId)}`);
+    });
+    ipcMain.handle("invites:accept", async (_event, payload) => {
+        const token = ensureStringField(payload?.token, "token");
+        return authedJson("POST", "/invites/accept", { token });
+    });
+    ipcMain.handle("invites:accept-public", async (_event, payload) => {
+        const token = ensureStringField(payload?.token, "token");
+        const password = ensureStringField(payload?.password, "password");
+        const backendHttpBase = sanitizeBackendBase(payload?.backendHttpBase);
+        const name = typeof payload?.name === "string" && payload.name.trim() !== ""
+            ? payload.name
+            : undefined;
+        return authService.acceptInvitePublic({
+            token,
+            password,
+            name,
+            backendHttpBase,
+        });
+    });
+    ipcMain.handle("billing:subscription", async () => authedJson("GET", "/billing/subscription"));
+    ipcMain.handle("billing:upgrade", async (_event, payload) => {
+        const plan = ensureStringField(payload?.plan, "plan");
+        return authedJson("POST", "/billing/upgrade", { plan });
+    });
+}
+/**
+ * Issue an authenticated HTTP request to the backend using the current
+ * session. The access token is resolved via `authService.getAccessToken()`
+ * so proactive refresh still applies. Throws a human-readable error when
+ * the backend returns a non-2xx response (carrying the backend's message
+ * when possible so the UI can surface, e.g., 402 / 403 reasons).
+ */
+async function authedJson(method, path, body) {
+    const ctx = authService.getAuthContext();
+    if (!ctx) {
+        throw new Error("not authenticated");
+    }
+    const accessToken = (await authService.getAccessToken()) ?? ctx.accessToken;
+    const url = `${ctx.backendHttpBase.replace(/\/$/, "")}${path}`;
+    const init = {
+        method,
+        headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json",
+            Authorization: `Bearer ${accessToken}`,
+        },
+    };
+    if (body !== undefined) {
+        init.body = JSON.stringify(body);
+    }
+    const response = await fetch(url, init);
+    if (response.status === 204)
+        return { ok: true };
+    const text = await response.text();
+    let parsed = null;
+    if (text) {
+        try {
+            parsed = JSON.parse(text);
+        }
+        catch {
+            parsed = { message: text };
+        }
+    }
+    if (!response.ok) {
+        const message = (parsed && typeof parsed === "object" && parsed.message) ||
+            `HTTP ${response.status}`;
+        const err = new Error(String(message));
+        err.status = response.status;
+        throw err;
+    }
+    return parsed ?? { ok: true };
 }
 app.whenReady().then(async () => {
     app.on("web-contents-created", (_event, contents) => {
@@ -667,6 +954,36 @@ app.whenReady().then(async () => {
         callback(permission === "media");
     });
     session.defaultSession.setPermissionCheckHandler((_wc, permission) => permission === "media");
+    // Renderer CSP. Tight default; connect-src allows backend HTTP/WS and Socket.IO.
+    // We rebuild the connect-src list from the loaded desktop config so env overrides
+    // propagate without editing this string.
+    session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+        const connectSrc = Array.from(allowedConnectOrigins).join(" ");
+        const csp = [
+            "default-src 'self'",
+            // Next.js dev injects inline scripts for HMR; production build is self-only.
+            isDev
+                ? "script-src 'self' 'unsafe-inline' 'unsafe-eval'"
+                : "script-src 'self'",
+            "style-src 'self' 'unsafe-inline'",
+            "img-src 'self' data: blob:",
+            "font-src 'self' data:",
+            "media-src 'self' blob: mediastream:",
+            `connect-src ${connectSrc}`,
+            "frame-ancestors 'none'",
+            "object-src 'none'",
+            "base-uri 'self'",
+            "form-action 'self'",
+        ].join("; ");
+        callback({
+            responseHeaders: {
+                ...details.responseHeaders,
+                "Content-Security-Policy": [csp],
+                "X-Content-Type-Options": ["nosniff"],
+                "Referrer-Policy": ["no-referrer"],
+            },
+        });
+    });
     session.defaultSession.setDisplayMediaRequestHandler(async (_request, callback) => {
         try {
             const sources = await desktopCapturer.getSources({
@@ -687,7 +1004,7 @@ app.whenReady().then(async () => {
                         return title.includes("meet");
                     }) || sources[0];
             }
-            addLog(`displayMedia: fonte selecionada id=${selected.id} | name=${selected.name}`);
+            addLog(`displayMedia: fonte selecionada id=${selected.id} | name=${selected.name} | audio=loopback`);
             callback({
                 video: selected,
                 audio: "loopback",
@@ -698,8 +1015,19 @@ app.whenReady().then(async () => {
             addLog(`displayMedia handler error: ${message}`);
             callback({});
         }
-    }, { useSystemPicker: true });
+    }, 
+    // macOS: picker nativo exige marcar "compartilhar audio do computador";
+    // handler automatico + loopback evita tracks de audio vazios.
+    { useSystemPicker: process.platform !== "darwin" });
     registerIpcHandlers();
+    try {
+        const snapshot = authService.hydrate();
+        syncFeedbackHttpBaseFromAuth(snapshot.backendHttpBase);
+        addLog(`Auth hydrated | authenticated=${snapshot.isAuthenticated} | tenant=${snapshot.tenant?.slug || "n/a"}`);
+    }
+    catch (err) {
+        addLog(`Auth hydrate failed | ${err instanceof Error ? err.message : String(err)}`);
+    }
     autoUpdater.autoDownload = false;
     autoUpdater.autoInstallOnAppQuit = true;
     autoUpdater.on("checking-for-update", () => setUpdateState({ status: "checking", message: "checking for updates..." }));

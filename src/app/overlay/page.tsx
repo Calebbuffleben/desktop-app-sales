@@ -277,12 +277,12 @@ export default function OverlayPage() {
   }, []);
 
   useEffect(() => {
-    if (!meetingId || !feedbackHttpBase) return;
+    if (!meetingId || !effectiveFeedbackBase) return;
     if (!session.isAuthenticated || !session.tenant) return;
     const client = new DesktopFeedbackClient({
       meetingId,
       tenantId: session.tenant.id,
-      httpBase: feedbackHttpBase,
+      httpBase: effectiveFeedbackBase,
       getAccessToken: async () =>
         (await window.desktopApi?.getAccessToken?.()) ?? null,
       onStatus: (status) => setStatusLine(status),
@@ -299,7 +299,7 @@ export default function OverlayPage() {
     });
     void client.start();
     return () => client.stop();
-  }, [meetingId, feedbackHttpBase, session.isAuthenticated, session.tenant]);
+  }, [meetingId, effectiveFeedbackBase, session.isAuthenticated, session.tenant, session.backendHttpBase]);
 
   useEffect(() => {
     if (items.length === 0) return;

@@ -15,6 +15,8 @@ import {
   buildEgressAudioWsUrl,
   buildPcm16SilentFrame,
   getEgressDefaults,
+  httpBaseToWsBase,
+  normalizeParticipantRole,
   wsToHttpBase,
 } from "../src/shared/egress-audio-protocol.ts";
 import WebSocket from "ws";
@@ -76,7 +78,24 @@ function broadcastAuthSession(snapshot: SessionSnapshot): void {
   }
 }
 
+function broadcastFeedbackContext(): void {
+  if (overlayWindow && !overlayWindow.isDestroyed()) {
+    overlayWindow.webContents.send("desktop:feedback-context-updated", {
+      meetingId: appState.meetingId,
+      feedbackHttpBase: appState.feedbackHttpBase,
+    });
+  }
+}
+
+function syncFeedbackHttpBaseFromAuth(httpBase: string | null | undefined): void {
+  if (!httpBase) return;
+  appState.feedbackHttpBase = httpBase;
+  registerBackendConnectOrigins(httpBase);
+  broadcastFeedbackContext();
+}
+
 authService.on("session-updated", (snapshot: SessionSnapshot) => {
+  syncFeedbackHttpBaseFromAuth(snapshot.backendHttpBase);
   broadcastAuthSession(snapshot);
   addLog(
     `Auth session updated | authenticated=${snapshot.isAuthenticated} | tenant=${snapshot.tenant?.slug || "n/a"}`,
@@ -113,6 +132,30 @@ const devServerUrl = process.env.NEXT_DEV_SERVER_URL ?? "http://localhost:3210";
 const execFileAsync = promisify(execFile);
 let overlayAnchorTimer: NodeJS.Timeout | null = null;
 let activeWinModule: null | (typeof import("active-win"))["activeWindow"] = null;
+
+/** Mutable connect-src allowlist for renderer CSP (updated when auth backend changes). */
+const allowedConnectOrigins = new Set<string>([
+  "'self'",
+  "http://localhost:3001",
+  "ws://localhost:3001",
+]);
+
+function registerBackendConnectOrigins(httpBase: string): void {
+  try {
+    const httpUrl = new URL(httpBase);
+    allowedConnectOrigins.add(httpUrl.origin);
+    const wsUrl = new URL(httpBaseToWsBase(httpBase));
+    allowedConnectOrigins.add(wsUrl.origin);
+  } catch {
+    /* ignore malformed backend base */
+  }
+}
+
+try {
+  registerBackendConnectOrigins(wsToHttpBase(initialConfig.BACKEND_WS_BASE));
+} catch {
+  /* ignore */
+}
 
 type WindowBounds = { x: number; y: number; width: number; height: number };
 
@@ -385,7 +428,7 @@ function registerIpcHandlers(): void {
     };
   });
 
-  ipcMain.handle("desktop:check-capture-readiness", () => {
+  ipcMain.handle("desktop:check-capture-readiness", async () => {
     const platform = process.platform;
     const microphoneStatus =
       typeof systemPreferences.getMediaAccessStatus === "function"
@@ -399,12 +442,32 @@ function registerIpcHandlers(): void {
       platform === "darwin" ? parseMacosMajor(os.release()) : undefined;
     const missing: Array<"macos-version" | "microphone" | "screen"> = [];
     const notes: string[] = [];
+    let displaySourceCount: number | undefined;
     if (platform === "darwin") {
       if (!macosMajor || macosMajor < 13) {
         missing.push("macos-version");
         notes.push(
           `macOS detectado: ${macosMajor ?? "?"}. Loopback nativo do Electron requer macOS 13+`,
         );
+      }
+      if (!app.isPackaged) {
+        notes.push(
+          `Modo dev: em Ajustes > Privacidade > Gravacao de Tela, habilite "${app.getName()}" (geralmente Electron), nao apenas Meet Desktop.`,
+        );
+      }
+      try {
+        const sources = await desktopCapturer.getSources({
+          types: ["screen", "window"],
+        });
+        displaySourceCount = sources.length;
+        if (screenStatus === "granted" && sources.length === 0) {
+          notes.push(
+            "Gravacao de Tela concedida, mas nenhuma fonte listada. Feche e reabra o app apos alterar a permissao.",
+          );
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        notes.push(`desktopCapturer indisponivel: ${message}`);
       }
     }
     if (microphoneStatus !== "granted") {
@@ -420,10 +483,13 @@ function registerIpcHandlers(): void {
     return {
       ok: missing.length === 0,
       platform,
+      appName: app.getName(),
+      isPackaged: app.isPackaged,
       macosVersion: platform === "darwin" ? os.release() : undefined,
       macosMajor,
       microphoneStatus,
       screenStatus,
+      displaySourceCount,
       missing,
       notes,
     };
@@ -617,7 +683,17 @@ function registerIpcHandlers(): void {
         await shell.openExternal(
           "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
         );
-        addLog("Opened macOS Screen Recording settings");
+        try {
+          const sources = await desktopCapturer.getSources({
+            types: ["screen", "window"],
+          });
+          addLog(
+            `Opened macOS Screen Recording settings | desktopCapturer sources=${sources.length}`,
+          );
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          addLog(`Opened macOS Screen Recording settings | probe failed: ${message}`);
+        }
         return { ok: true, kind, granted: null };
       }
       addLog(`Permission request (${kind}) delegated to OS/browser prompt`);
@@ -706,6 +782,12 @@ function registerIpcHandlers(): void {
     const sampleRate =
       typeof payload?.sampleRate === "number" ? payload.sampleRate : defaults.sampleRate;
     const channels = typeof payload?.channels === "number" ? payload.channels : defaults.channels;
+    const participantRole =
+      normalizeParticipantRole(
+        typeof payload?.participantRole === "string"
+          ? payload.participantRole
+          : defaults.participantRole,
+      ) ?? defaults.participantRole;
 
     const wsUrl = buildEgressAudioWsUrl({
       baseWs: defaults.baseWs,
@@ -713,6 +795,7 @@ function registerIpcHandlers(): void {
       meetUrl,
       meetingId,
       participant,
+      participantRole,
       track,
       sampleRate,
       channels,
@@ -734,6 +817,12 @@ function registerIpcHandlers(): void {
     const sampleRate =
       typeof payload?.sampleRate === "number" ? payload.sampleRate : defaults.sampleRate;
     const channels = typeof payload?.channels === "number" ? payload.channels : defaults.channels;
+    const participantRole =
+      normalizeParticipantRole(
+        typeof payload?.participantRole === "string"
+          ? payload.participantRole
+          : defaults.participantRole,
+      ) ?? defaults.participantRole;
 
     // The backend enforces JWT on `/egress-audio` upgrade (see
     // `egress-audio-gateway.ts`). Pull the access token from the auth
@@ -758,6 +847,7 @@ function registerIpcHandlers(): void {
       meetUrl,
       meetingId,
       participant,
+      participantRole,
       track,
       sampleRate,
       channels,
@@ -1078,19 +1168,7 @@ app.whenReady().then(async () => {
   // We rebuild the connect-src list from the loaded desktop config so env overrides
   // propagate without editing this string.
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
-    const connectOrigins = new Set<string>([
-      "'self'",
-      "http://localhost:3001",
-      "ws://localhost:3001",
-    ]);
-    try {
-      const wsBase = new URL(initialConfig.BACKEND_WS_BASE);
-      connectOrigins.add(wsBase.origin);
-      connectOrigins.add(wsToHttpBase(initialConfig.BACKEND_WS_BASE));
-    } catch {
-      /* ignore malformed url */
-    }
-    const connectSrc = Array.from(connectOrigins).join(" ");
+    const connectSrc = Array.from(allowedConnectOrigins).join(" ");
     const csp = [
       "default-src 'self'",
       // Next.js dev injects inline scripts for HMR; production build is self-only.
@@ -1139,7 +1217,7 @@ app.whenReady().then(async () => {
             }) || sources[0];
         }
         addLog(
-          `displayMedia: fonte selecionada id=${selected.id} | name=${selected.name}`,
+          `displayMedia: fonte selecionada id=${selected.id} | name=${selected.name} | audio=loopback`,
         );
         callback({
           video: selected,
@@ -1151,12 +1229,15 @@ app.whenReady().then(async () => {
         callback({});
       }
     },
-    { useSystemPicker: true },
+    // macOS: picker nativo exige marcar "compartilhar audio do computador";
+    // handler automatico + loopback evita tracks de audio vazios.
+    { useSystemPicker: process.platform !== "darwin" },
   );
 
   registerIpcHandlers();
   try {
     const snapshot = authService.hydrate();
+    syncFeedbackHttpBaseFromAuth(snapshot.backendHttpBase);
     addLog(
       `Auth hydrated | authenticated=${snapshot.isAuthenticated} | tenant=${snapshot.tenant?.slug || "n/a"}`,
     );

@@ -14,6 +14,7 @@ import {
   DesktopFeedbackClient,
   type FeedbackConnectionState,
 } from "@/shared/feedback-client";
+import { httpBaseToWsBase, resolveEffectiveMeetingId } from "@/shared/egress-audio-protocol";
 import { SessionGate } from "@/shared/session-gate";
 import { useAuth } from "@/shared/auth-context";
 
@@ -25,6 +26,13 @@ type CaptureErrorInfo = {
 };
 
 type CaptureStatus = "idle" | "capturing";
+type CaptureStreamRole = "host" | "participant";
+type CaptureStreamResult = {
+  role: CaptureStreamRole;
+  wsUrl: string;
+  resolvedSource: string;
+  platform: string;
+};
 type UpdateUiState = {
   status:
     | "idle"
@@ -44,6 +52,53 @@ const FALLBACK_UPDATE_STATE = {
   version: "",
   progress: 0,
 } satisfies UpdateUiState;
+
+const IDLE_AUDIO_WS_STATE: AudioWsState = {
+  status: "idle",
+  reconnectAttempt: 0,
+};
+
+const EMPTY_AUDIO_METER: AudioMeter = {
+  micRms: 0,
+  loopbackRms: 0,
+  mixedRms: 0,
+  bytesSent: 0,
+  framesSent: 0,
+  lastFrameTs: 0,
+};
+
+function mergeAudioWsStates(host: AudioWsState, remote: AudioWsState): AudioWsState {
+  const states = [host, remote];
+  const priority = ["error", "reconnecting", "connecting", "connected", "idle"];
+  const selected =
+    states
+      .slice()
+      .sort((a, b) => priority.indexOf(a.status) - priority.indexOf(b.status))[0] ||
+    IDLE_AUDIO_WS_STATE;
+  return {
+    ...selected,
+    reconnectAttempt: Math.max(host.reconnectAttempt || 0, remote.reconnectAttempt || 0),
+    nextRetryInMs:
+      host.nextRetryInMs !== undefined || remote.nextRetryInMs !== undefined
+        ? Math.min(
+            host.nextRetryInMs ?? Number.POSITIVE_INFINITY,
+            remote.nextRetryInMs ?? Number.POSITIVE_INFINITY,
+          )
+        : undefined,
+    lastError: host.lastError || remote.lastError,
+  };
+}
+
+function mergeAudioMeters(host: AudioMeter, remote: AudioMeter): AudioMeter {
+  return {
+    micRms: host.micRms,
+    loopbackRms: remote.mixedRms || remote.loopbackRms,
+    mixedRms: Math.max(host.mixedRms, remote.mixedRms, remote.loopbackRms),
+    bytesSent: host.bytesSent + remote.bytesSent,
+    framesSent: host.framesSent + remote.framesSent,
+    lastFrameTs: Math.max(host.lastFrameTs, remote.lastFrameTs),
+  };
+}
 
 function VuBar({
   label,
@@ -137,10 +192,10 @@ function HomeAuthenticated() {
   const [anchorMode, setAnchorMode] = useState<"fixed" | "meet-window">("fixed");
   const [debugLogs, setDebugLogs] = useState(false);
   const [forcePolling, setForcePolling] = useState(false);
-  const [audioWsState, setAudioWsState] = useState<AudioWsState>({
-    status: "idle",
-    reconnectAttempt: 0,
-  });
+  const [hostAudioWsState, setHostAudioWsState] =
+    useState<AudioWsState>(IDLE_AUDIO_WS_STATE);
+  const [remoteAudioWsState, setRemoteAudioWsState] =
+    useState<AudioWsState>(IDLE_AUDIO_WS_STATE);
   const [feedbackState, setFeedbackState] = useState<FeedbackConnectionState>({
     socketStatus: "idle",
     pollingActive: false,
@@ -162,14 +217,17 @@ function HomeAuthenticated() {
   const [displaySources, setDisplaySources] = useState<DisplaySource[]>([]);
   const [selectedSourceId, setSelectedSourceId] = useState<string>("");
   const [loadingSources, setLoadingSources] = useState(false);
-  const [audioMeter, setAudioMeter] = useState<AudioMeter>({
-    micRms: 0,
-    loopbackRms: 0,
-    mixedRms: 0,
-    bytesSent: 0,
-    framesSent: 0,
-    lastFrameTs: 0,
-  });
+  const [hostAudioMeter, setHostAudioMeter] = useState<AudioMeter>(EMPTY_AUDIO_METER);
+  const [remoteAudioMeter, setRemoteAudioMeter] =
+    useState<AudioMeter>(EMPTY_AUDIO_METER);
+  const audioWsState = useMemo(
+    () => mergeAudioWsStates(hostAudioWsState, remoteAudioWsState),
+    [hostAudioWsState, remoteAudioWsState],
+  );
+  const audioMeter = useMemo(
+    () => mergeAudioMeters(hostAudioMeter, remoteAudioMeter),
+    [hostAudioMeter, remoteAudioMeter],
+  );
   const isBridgeAvailable = bridgeReady;
 
   const appendLog = useCallback((message: string) => {
@@ -200,12 +258,20 @@ function HomeAuthenticated() {
     [appendLog],
   );
 
-  const [captureService] = useState(
+  const [hostCaptureService] = useState(
     () =>
       new DesktopAudioCaptureService(
-        (message) => appendLog(message),
-        (state) => setAudioWsState(state),
-        (meter) => setAudioMeter(meter),
+        (message) => appendLog(`[host] ${message}`),
+        (state) => setHostAudioWsState(state),
+        (meter) => setHostAudioMeter(meter),
+      ),
+  );
+  const [remoteCaptureService] = useState(
+    () =>
+      new DesktopAudioCaptureService(
+        (message) => appendLog(`[remote] ${message}`),
+        (state) => setRemoteAudioWsState(state),
+        (meter) => setRemoteAudioMeter(meter),
       ),
   );
 
@@ -296,21 +362,33 @@ function HomeAuthenticated() {
       unsubscribeLogEntry();
       unsubscribeSelectedSource();
     };
-  }, [bridgeReady, reportError]);
+  }, [bridgeReady, reportError, session.backendHttpBase]);
 
   useEffect(() => {
     return () => {
-      void captureService.stop();
+      void hostCaptureService.stop();
+      void remoteCaptureService.stop();
     };
-  }, [captureService]);
+  }, [hostCaptureService, remoteCaptureService]);
+
+  const effectiveMeetingId = resolveEffectiveMeetingId(meetUrl, meetingId);
+
+  const stopAllCaptureServices = useCallback(async () => {
+    await Promise.allSettled([
+      hostCaptureService.stop(),
+      remoteCaptureService.stop(),
+    ]);
+  }, [hostCaptureService, remoteCaptureService]);
+  const effectiveFeedbackBase =
+    session.backendHttpBase || feedbackBase || "http://localhost:3001";
 
   useEffect(() => {
-    if (!isBridgeAvailable || !meetingId || !feedbackBase) return;
+    if (!isBridgeAvailable || !effectiveMeetingId || !effectiveFeedbackBase) return;
     if (!session.isAuthenticated || !session.tenant) return;
     const client = new DesktopFeedbackClient({
-      meetingId,
+      meetingId: effectiveMeetingId,
       tenantId: session.tenant.id,
-      httpBase: feedbackBase,
+      httpBase: effectiveFeedbackBase,
       getAccessToken: async () =>
         (await window.desktopApi?.getAccessToken?.()) ?? null,
       onFeedback: () => {},
@@ -328,12 +406,13 @@ function HomeAuthenticated() {
     };
   }, [
     isBridgeAvailable,
-    meetingId,
-    feedbackBase,
+    effectiveMeetingId,
+    effectiveFeedbackBase,
     forcePolling,
     debugLogs,
     session.isAuthenticated,
     session.tenant,
+    session.backendHttpBase,
   ]);
 
   async function handleStartCapture(): Promise<void> {
@@ -348,39 +427,100 @@ function HomeAuthenticated() {
     try {
       setCaptureError(null);
       const tenantId = session.tenant.id;
-      const result = await captureService.start({
-        config,
-        meetUrl,
-        meetingId: meetingId || undefined,
-        participant,
-        track,
-        sourceMode,
-        debug: debugLogs,
-        tenantId,
-        getAccessToken: async () =>
-          (await window.desktopApi?.getAccessToken?.()) ?? null,
+      const operatorParticipant =
+        participant.trim() || session.user?.id || "desktop";
+      const wsBase = session.backendHttpBase
+        ? httpBaseToWsBase(session.backendHttpBase)
+        : config.BACKEND_WS_BASE;
+      const captureConfig: DesktopConfig = {
+        ...config,
+        BACKEND_WS_BASE: wsBase,
+      };
+      const resolvedMeetingId = resolveEffectiveMeetingId(meetUrl, meetingId);
+      const resolvedFeedbackBase = session.backendHttpBase || feedbackBase;
+
+      await window.desktopApi.setFeedbackContext({
+        meetingId: resolvedMeetingId,
+        feedbackHttpBase: resolvedFeedbackBase,
       });
+      setMeetingId(resolvedMeetingId);
+      setFeedbackBase(resolvedFeedbackBase);
+
+      const getAccessToken = async () =>
+        (await window.desktopApi?.getAccessToken?.()) ?? null;
+      const remoteParticipant = "meet-remote";
+      const remoteTrack = track.trim() || "tab-audio";
+      const results: CaptureStreamResult[] = [];
+
+      if (sourceMode === "auto" || sourceMode === "microphone") {
+        const hostResult = await hostCaptureService.start({
+          config: captureConfig,
+          meetUrl,
+          meetingId: resolvedMeetingId,
+          participant: operatorParticipant,
+          participantRole: "host",
+          track: "microphone",
+          sourceMode: "microphone",
+          debug: debugLogs,
+          tenantId,
+          getAccessToken,
+        });
+        results.push({ role: "host", ...hostResult });
+      }
+
+      if (sourceMode === "auto" || sourceMode === "system") {
+        if (typeof window.desktopApi.checkCaptureReadiness === "function") {
+          const loopbackReadiness =
+            await window.desktopApi.checkCaptureReadiness();
+          setReadiness(loopbackReadiness);
+          if (!loopbackReadiness.ok) {
+            const hint =
+              loopbackReadiness.notes.join(" ") ||
+              "Permissões de captura incompletas.";
+            throw new Error(
+              sourceMode === "system"
+                ? `Loopback do Meet indisponível: ${hint}`
+                : `Loopback do cliente indisponível (microfone do host pode continuar): ${hint}`,
+            );
+          }
+        }
+        const remoteResult = await remoteCaptureService.start({
+          config: captureConfig,
+          meetUrl,
+          meetingId: resolvedMeetingId,
+          participant: remoteParticipant,
+          participantRole: "participant",
+          track: remoteTrack,
+          sourceMode: "system",
+          debug: debugLogs,
+          tenantId,
+          getAccessToken,
+        });
+        results.push({ role: "participant", ...remoteResult });
+      }
+
       setCaptureStatus("capturing");
       setCaptureDetails(
-        `source=${result.resolvedSource} | platform=${result.platform} | ws=${result.wsUrl}`,
+        results
+          .map(
+            (result) =>
+              `${result.role}: source=${result.resolvedSource} | platform=${result.platform} | ws=${result.wsUrl}`,
+          )
+          .join("\n"),
       );
       await window.desktopApi.startCapture();
     } catch (error) {
       reportError("start-capture", error);
       setCaptureStatus("idle");
       setCaptureDetails("");
-      try {
-        await captureService.stop();
-      } catch {
-        /* best-effort cleanup */
-      }
+      await stopAllCaptureServices();
     }
   }
 
   async function handleStopCapture(): Promise<void> {
     if (!window.desktopApi) return;
     try {
-      await captureService.stop();
+      await stopAllCaptureServices();
       setCaptureStatus("idle");
       setCaptureDetails("");
       await window.desktopApi.stopCapture();
@@ -639,25 +779,27 @@ function HomeAuthenticated() {
               <span className={pill}>Bridge: {isBridgeAvailable ? "ok" : "indisponivel"}</span>
               <span className={pill}>Anchor: {anchorMode === "meet-window" ? "meet-window" : "fixed"}</span>
               <span className={pill}>Meet: {anchorMode === "meet-window" ? "detectada" : "—"}</span>
+              <span className={pill}>Host: microphone</span>
+              <span className={pill}>Cliente: system/tab-audio</span>
             </div>
 
             <div className="mb-4 grid grid-cols-1 gap-3 md:grid-cols-2">
               <label className={labelCls}>
-                Fonte de captura (MVP cross-platform)
+                Fonte de captura
                 <select
                   className={field}
                   value={sourceMode}
                   onChange={(e) => setSourceMode(e.target.value as AudioSourceMode)}
                 >
-                  <option value="auto">auto (matriz por SO)</option>
-                  <option value="microphone">microphone</option>
-                  <option value="system">system / loopback</option>
+                  <option value="auto">auto robusto (microphone host + system cliente)</option>
+                  <option value="microphone">microphone (host/contexto)</option>
+                  <option value="system">system / loopback (cliente/feedback)</option>
                 </select>
               </label>
               <div className={subbox}>
-                <p>macOS: microfone primeiro, loopback opcional via device virtual.</p>
-                <p>Windows: loopback/WASAPI quando disponível, fallback microfone.</p>
-                <p>Linux: PulseAudio/PipeWire quando disponível, fallback microfone.</p>
+                <p>Auto abre dois streams: microfone local como host e áudio remoto do Meet como participant.</p>
+                <p>O cliente não precisa instalar nada; a fala dele vem pelo system/loopback do Meet.</p>
+                <p>Se o loopback falhar, a captura falha para evitar classificar cliente como host.</p>
               </div>
               <label className={`${labelCls} md:col-span-2`}>
                 Runtime flags
@@ -742,6 +884,21 @@ function HomeAuthenticated() {
                       >
                         abrir preferências
                       </button>
+                    </li>
+                  ) : null}
+                  {readiness.isPackaged === false && readiness.appName ? (
+                    <li>
+                      Dev: habilite Gravação de Tela para{" "}
+                      <span className="font-semibold">{readiness.appName}</span>{" "}
+                      (não só Meet Desktop empacotado).
+                    </li>
+                  ) : null}
+                  {typeof readiness.displaySourceCount === "number" ? (
+                    <li>
+                      Fontes desktopCapturer: {readiness.displaySourceCount}
+                      {readiness.displaySourceCount === 0
+                        ? " — reinicie o app após conceder permissão."
+                        : ""}
                     </li>
                   ) : null}
                 </ul>
@@ -842,7 +999,11 @@ function HomeAuthenticated() {
                   : "Bridge desktopApi indisponível — abra via Electron (não funciona em um navegador comum)."}
               </p>
             ) : null}
-            {captureDetails ? <p className={`${subbox} mt-3 font-mono text-[11px] text-zinc-300`}>{captureDetails}</p> : null}
+            {captureDetails ? (
+              <p className={`${subbox} mt-3 whitespace-pre-wrap font-mono text-[11px] text-zinc-300`}>
+                {captureDetails}
+              </p>
+            ) : null}
           </CopilotSection>
 
           <CopilotSection moduleId="M02" kicker="Telemetry" title="Conexões em tempo real">
@@ -850,6 +1011,9 @@ function HomeAuthenticated() {
               <div className={subbox}>
                 <p className="font-mono text-[10px] uppercase tracking-wider text-cyan-500/90">WS egress-audio</p>
                 <p className="mt-1 font-mono text-[11px] text-zinc-300">Status: {audioWsState.status}</p>
+                <p className="font-mono text-[11px] text-zinc-400">
+                  Host: {hostAudioWsState.status} · Remoto: {remoteAudioWsState.status}
+                </p>
                 <p className="font-mono text-[11px] text-zinc-400">Retry #{audioWsState.reconnectAttempt}</p>
                 <p className="font-mono text-[11px] text-zinc-400">Próximo: {formatMs(audioWsState.nextRetryInMs)}</p>
                 <p className="font-mono text-[11px] text-zinc-500">Erro: {audioWsState.lastError || "n/a"}</p>

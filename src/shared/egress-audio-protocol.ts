@@ -1,11 +1,28 @@
 import type { DesktopConfig } from "./desktop-config.js";
 
+/** Declared stream role. Host is local microphone; participant is remote Meet audio. */
+export type ParticipantRole = "host" | "participant" | "unknown";
+
+const PARTICIPANT_ROLES = new Set<ParticipantRole>(["host", "participant", "unknown"]);
+
+export function normalizeParticipantRole(value?: string): ParticipantRole | undefined {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase();
+  if (PARTICIPANT_ROLES.has(normalized as ParticipantRole)) {
+    return normalized as ParticipantRole;
+  }
+  return undefined;
+}
+
 export type EgressAudioParams = {
   baseWs: string;
   egressPath: string;
   meetUrl?: string;
   meetingId?: string;
   participant?: string;
+  /** Declared role for this audio stream. */
+  participantRole?: ParticipantRole;
   track?: string;
   sampleRate?: number;
   channels?: number;
@@ -35,6 +52,18 @@ export function extractMeetRoomCode(meetUrl?: string): string {
   } catch {
     return "room";
   }
+}
+
+/** Canonical meeting id for audio egress + Socket.IO feedback room. */
+export function resolveEffectiveMeetingId(
+  meetUrl?: string,
+  meetingId?: string,
+): string {
+  const trimmed = String(meetingId || "").trim();
+  if (trimmed) {
+    return sanitize(trimmed) || extractMeetRoomCode(meetUrl);
+  }
+  return extractMeetRoomCode(meetUrl);
 }
 
 export function normalizeWsBase(baseWs: string, pageUrl?: string): string {
@@ -71,6 +100,20 @@ export function wsToHttpBase(wsBase: string): string {
   }
 }
 
+/** Derive ws/wss base from the authenticated backend HTTP origin. */
+export function httpBaseToWsBase(httpBase: string): string {
+  try {
+    const url = new URL(httpBase);
+    url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+    url.pathname = "/";
+    url.search = "";
+    url.hash = "";
+    return url.toString().replace(/\/+$/, "");
+  } catch {
+    return "ws://localhost:3001";
+  }
+}
+
 export function buildEgressAudioWsUrl(params: EgressAudioParams): string {
   const pageUrl = params.meetUrl ?? "https://meet.google.com/";
   const wsBase = normalizeWsBase(params.baseWs, pageUrl);
@@ -103,6 +146,10 @@ export function buildEgressAudioWsUrl(params: EgressAudioParams): string {
   if (params.tenantId) {
     url.searchParams.set("tenantId", sanitize(params.tenantId));
   }
+  const participantRole = normalizeParticipantRole(params.participantRole);
+  if (participantRole) {
+    url.searchParams.set("participantRole", participantRole);
+  }
   return url.toString();
 }
 
@@ -113,6 +160,7 @@ export function getEgressDefaults(cfg: DesktopConfig) {
     sampleRate: cfg.DEFAULT_SAMPLE_RATE,
     channels: cfg.DEFAULT_CHANNELS,
     participant: "browser",
+    participantRole: "participant" as ParticipantRole,
     track: "tab-audio",
   };
 }

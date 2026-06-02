@@ -4,6 +4,7 @@ import {
   buildEgressAudioWsUrl,
   buildPcm16SilentFrame,
   getEgressDefaults,
+  normalizeParticipantRole,
 } from "../src/shared/egress-audio-protocol";
 
 async function run(): Promise<void> {
@@ -13,6 +14,8 @@ async function run(): Promise<void> {
   const meetUrl = process.env.MEET_URL || "https://meet.google.com/abc-defg-hij";
   const meetingId = process.env.MEETING_ID;
   const participant = process.env.PARTICIPANT || defaults.participant;
+  const participantRole =
+    normalizeParticipantRole(process.env.PARTICIPANT_ROLE) || defaults.participantRole;
   const track = process.env.TRACK || defaults.track;
   const sampleRate = Number(process.env.SAMPLE_RATE || defaults.sampleRate);
   const channels = Number(process.env.CHANNELS || defaults.channels);
@@ -23,6 +26,7 @@ async function run(): Promise<void> {
     meetUrl,
     meetingId,
     participant,
+    participantRole,
     track,
     sampleRate,
     channels,

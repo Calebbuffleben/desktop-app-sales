@@ -34,6 +34,7 @@ async function validateEgressProtocol(meetingId: string): Promise<void> {
     meetUrl: `https://meet.google.com/${meetingId}`,
     meetingId,
     participant: "desktop-parity-test",
+    participantRole: defaults.participantRole,
     track: "desktop-phase7-track",
     sampleRate: defaults.sampleRate,
     channels: defaults.channels,
