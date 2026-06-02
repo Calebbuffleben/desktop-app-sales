@@ -87,12 +87,22 @@ function MembersScreen() {
               <span className="text-cyan-300">{session.tenant?.slug}</span>
             </p>
           </div>
-          <Link
-            href="/"
-            className="self-start rounded-md border border-zinc-700/80 bg-zinc-950/70 px-3 py-1.5 font-mono text-[10px] uppercase tracking-wider text-zinc-300 hover:border-cyan-500/60 hover:text-cyan-100"
-          >
-            ← Voltar
-          </Link>
+          <div className="flex flex-wrap items-center gap-2 md:justify-end">
+            {isAdmin ? (
+              <Link
+                href="/playbooks"
+                className="self-start rounded-md border border-violet-500/40 bg-violet-500/10 px-3 py-1.5 font-mono text-[10px] uppercase tracking-wider text-violet-100 hover:border-violet-400/60 hover:text-violet-50"
+              >
+                Playbooks
+              </Link>
+            ) : null}
+            <Link
+              href="/"
+              className="self-start rounded-md border border-zinc-700/80 bg-zinc-950/70 px-3 py-1.5 font-mono text-[10px] uppercase tracking-wider text-zinc-300 hover:border-cyan-500/60 hover:text-cyan-100"
+            >
+              ← Voltar
+            </Link>
+          </div>
         </header>
 
         <SubscriptionCard

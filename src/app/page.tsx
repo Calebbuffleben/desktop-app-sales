@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import Link from "next/link";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import {
   DesktopAudioCaptureService,
   type AudioMeter,
@@ -170,6 +171,7 @@ export default function Home() {
 
 function HomeAuthenticated() {
   const { session, logout } = useAuth();
+  const isAdmin = session.membership?.role === "OWNER" || session.membership?.role === "ADMIN";
   const [bridgeReady, setBridgeReady] = useState(false);
   const [isElectronRuntime, setIsElectronRuntime] = useState(false);
   const [captureStatus, setCaptureStatus] = useState<CaptureStatus>("idle");
@@ -186,7 +188,7 @@ function HomeAuthenticated() {
   const [validationResult, setValidationResult] = useState("");
   const [sourceMode, setSourceMode] = useState<AudioSourceMode>("auto");
   const [captureDetails, setCaptureDetails] = useState("");
-  const [feedbackBase, setFeedbackBase] = useState("http://localhost:3001");
+  const [feedbackBase, setFeedbackBase] = useState("https://backend-analysis-production-a688.up.railway.app");
   const [anchorMode, setAnchorMode] = useState<"fixed" | "meet-window">("fixed");
   const [debugLogs, setDebugLogs] = useState(false);
   const [forcePolling, setForcePolling] = useState(false);
@@ -301,7 +303,7 @@ function HomeAuthenticated() {
         setLogs(state.logs);
         setMeetingId(state.meetingId || "");
         setFeedbackBase(
-          session.backendHttpBase || state.feedbackHttpBase || "http://localhost:3001",
+          session.backendHttpBase || state.feedbackHttpBase || "https://backend-analysis-production-a688.up.railway.app",
         );
         setAnchorMode(state.anchorMode);
         setSelectedSourceId(state.selectedSourceId || "");
@@ -733,6 +735,14 @@ function HomeAuthenticated() {
                     {session.membership?.role ?? "—"}
                   </p>
                   <div className="mt-1 flex items-center gap-2">
+                    {isAdmin ? (
+                      <Link
+                        href="/playbooks"
+                        className="rounded-md border border-violet-500/40 bg-violet-500/10 px-2 py-1 font-mono text-[10px] uppercase tracking-wider text-violet-100 hover:bg-violet-500/20"
+                      >
+                        Playbooks
+                      </Link>
+                    ) : null}
                     <a
                       href="/members"
                       className="rounded-md border border-cyan-500/40 bg-cyan-500/10 px-2 py-1 font-mono text-[10px] uppercase tracking-wider text-cyan-100 hover:bg-cyan-500/20"

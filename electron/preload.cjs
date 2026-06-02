@@ -6,6 +6,7 @@ const ALLOWED_INVOKE_CHANNELS = new Set([
   "desktop:capture-stop",
   "desktop:set-click-through",
   "desktop:set-overlay-window-visible",
+  "desktop:open-external",
   "desktop:set-feedback-context",
   "desktop:protocol-preview",
   "desktop:protocol-validate",
@@ -34,6 +35,10 @@ const ALLOWED_INVOKE_CHANNELS = new Set([
   "invites:accept-public",
   "billing:subscription",
   "billing:upgrade",
+  "playbooks:list",
+  "playbooks:create",
+  "playbooks:update",
+  "playbooks:remove",
 ]);
 
 const ALLOWED_LISTEN_CHANNELS = new Set([
@@ -81,6 +86,8 @@ contextBridge.exposeInMainWorld(
       invokeStrict("desktop:set-click-through", { enabled: Boolean(enabled) }),
     setOverlayWindowVisible: (visible) =>
       invokeStrict("desktop:set-overlay-window-visible", { visible: Boolean(visible) }),
+    openExternalUrl: (url) =>
+      invokeStrict("desktop:open-external", { url: String(url || "") }),
     setFeedbackContext: (payload) =>
       invokeStrict("desktop:set-feedback-context", ensureObjectOrUndefined(payload)),
     protocolPreview: (payload) => invokeStrict("desktop:protocol-preview", payload),
@@ -121,5 +128,9 @@ contextBridge.exposeInMainWorld(
     invitesAcceptPublic: (payload) => invokeStrict("invites:accept-public", payload),
     billingSubscription: () => invokeStrict("billing:subscription"),
     billingUpgrade: (payload) => invokeStrict("billing:upgrade", payload),
+    playbooksList: () => invokeStrict("playbooks:list"),
+    playbooksCreate: (payload) => invokeStrict("playbooks:create", ensureObjectOrUndefined(payload)),
+    playbooksUpdate: (payload) => invokeStrict("playbooks:update", ensureObjectOrUndefined(payload)),
+    playbooksRemove: (payload) => invokeStrict("playbooks:remove", ensureObjectOrUndefined(payload)),
   }),
 );

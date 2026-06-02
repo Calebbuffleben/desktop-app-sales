@@ -5,7 +5,33 @@ import {
   DesktopFeedbackClient,
   type FeedbackPayload,
 } from "@/shared/feedback-client";
+import type { PlaybookStepResolved } from "@/shared/playbook-metadata";
 import { useAuth } from "@/shared/auth-context";
+
+async function copyTextToClipboard(text: string): Promise<boolean> {
+  try {
+    if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    /* fallback */
+  }
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "");
+    ta.style.position = "fixed";
+    ta.style.left = "-9999px";
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(ta);
+    return ok;
+  } catch {
+    return false;
+  }
+}
 
 type CaptureStatus = "idle" | "capturing";
 type OverlayItem = {
@@ -60,6 +86,67 @@ function parseSpinBadge(payload: FeedbackPayload): string {
   return parts.join(" · ");
 }
 
+function PlaybookStepControl({ step }: { step: PlaybookStepResolved }) {
+  const [copied, setCopied] = useState(false);
+  const detailTitle = step.detail ? step.detail : undefined;
+
+  if (step.action.type === "noop") {
+    return (
+      <div
+        className="rounded-lg border border-white/10 bg-black/25 px-2.5 py-1.5 text-left"
+        title={detailTitle}
+      >
+        <span className="text-[11px] font-medium leading-snug text-zinc-300">{step.label}</span>
+        {step.detail ? (
+          <span className="mt-0.5 block text-[10px] leading-snug text-zinc-500">{step.detail}</span>
+        ) : null}
+      </div>
+    );
+  }
+
+  if (step.action.type === "copy_text") {
+    return (
+      <button
+        type="button"
+        title={detailTitle}
+        className="w-full rounded-lg border border-cyan-500/35 bg-cyan-950/40 px-2.5 py-1.5 text-left transition hover:border-cyan-400/50 hover:bg-cyan-950/55"
+        onClick={() => {
+          void (async () => {
+            const ok = await copyTextToClipboard(step.action.payload);
+            if (ok) {
+              setCopied(true);
+              window.setTimeout(() => setCopied(false), 1600);
+            }
+          })();
+        }}
+      >
+        <span className="text-[11px] font-semibold leading-snug text-cyan-100">
+          {copied ? "Copiado para a área de transferência" : step.label}
+        </span>
+        {step.detail && !copied ? (
+          <span className="mt-0.5 block text-[10px] leading-snug text-cyan-200/70">{step.detail}</span>
+        ) : null}
+      </button>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      title={detailTitle}
+      className="w-full rounded-lg border border-emerald-500/35 bg-emerald-950/35 px-2.5 py-1.5 text-left transition hover:border-emerald-400/45 hover:bg-emerald-950/50"
+      onClick={() => {
+        void window.desktopApi?.openExternalUrl?.(step.action.payload);
+      }}
+    >
+      <span className="text-[11px] font-semibold leading-snug text-emerald-100">{step.label}</span>
+      {step.detail ? (
+        <span className="mt-0.5 block text-[10px] leading-snug text-emerald-200/75">{step.detail}</span>
+      ) : null}
+    </button>
+  );
+}
+
 function FeedbackTipCard({
   item,
   ttlMs,
@@ -77,6 +164,7 @@ function FeedbackTipCard({
       ? (item.payload.metadata?.tips as string[])
       : [];
   const spinBadge = parseSpinBadge(item.payload);
+  const playbook = item.payload.playbook;
   const elapsed = Math.max(0, now - item.createdAt);
   const remaining = Math.max(0, ttlMs - elapsed);
   const progress = Math.min(1, remaining / ttlMs);
@@ -121,6 +209,20 @@ function FeedbackTipCard({
               {tips.join(" · ")}
             </p>
           ) : null}
+          {playbook && playbook.steps.length > 0 ? (
+            <div className="mt-2.5 border-t border-white/10 pt-2.5">
+              {playbook.title ? (
+                <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-zinc-400">
+                  {playbook.title}
+                </p>
+              ) : null}
+              <div className="flex flex-col gap-1.5">
+                {playbook.steps.map((step) => (
+                  <PlaybookStepControl key={step.id} step={step} />
+                ))}
+              </div>
+            </div>
+          ) : null}
           <p className="mt-2 font-mono text-[9px] uppercase tracking-wider text-zinc-500">
             {(item.payload.type || "llm_insight").replaceAll("_", " ")}
           </p>
@@ -143,9 +245,7 @@ export default function OverlayPage() {
   const { session } = useAuth();
   const [captureStatus, setCaptureStatus] = useState<CaptureStatus>("idle");
   const [meetingId, setMeetingId] = useState("abc-defg-hij");
-  const [feedbackHttpBase, setFeedbackHttpBase] = useState("http://localhost:3001");
-  const effectiveFeedbackBase =
-    session.backendHttpBase || feedbackHttpBase || "http://localhost:3001";
+  const [feedbackHttpBase, setFeedbackHttpBase] = useState("https://backend-analysis-production-a688.up.railway.app");
   const [statusLine, setStatusLine] = useState("inicializando feedback…");
   const [items, setItems] = useState<OverlayItem[]>([]);
   const [isDismissed, setIsDismissed] = useState(false);
@@ -156,7 +256,7 @@ export default function OverlayPage() {
     void window.desktopApi.getState().then((state) => {
       setCaptureStatus(state.captureStatus);
       setMeetingId(state.meetingId || "abc-defg-hij");
-      setFeedbackHttpBase(state.feedbackHttpBase || "http://localhost:3001");
+      setFeedbackHttpBase(state.feedbackHttpBase || "https://backend-analysis-production-a688.up.railway.app");
     });
     const unsubscribe = window.desktopApi.onFeedbackContextUpdated((payload) => {
       setMeetingId(payload.meetingId);
