@@ -1,3 +1,13 @@
+const PARTICIPANT_ROLES = new Set(["host", "participant", "unknown"]);
+export function normalizeParticipantRole(value) {
+    const normalized = String(value || "")
+        .trim()
+        .toLowerCase();
+    if (PARTICIPANT_ROLES.has(normalized)) {
+        return normalized;
+    }
+    return undefined;
+}
 function sanitize(value) {
     return String(value || "")
         .replace(/[^a-zA-Z0-9_\-.]/g, "_")
@@ -18,6 +28,14 @@ export function extractMeetRoomCode(meetUrl) {
     catch {
         return "room";
     }
+}
+/** Canonical meeting id for audio egress + Socket.IO feedback room. */
+export function resolveEffectiveMeetingId(meetUrl, meetingId) {
+    const trimmed = String(meetingId || "").trim();
+    if (trimmed) {
+        return sanitize(trimmed) || extractMeetRoomCode(meetUrl);
+    }
+    return extractMeetRoomCode(meetUrl);
 }
 export function normalizeWsBase(baseWs, pageUrl) {
     let normalized = String(baseWs || "").trim();
@@ -50,6 +68,20 @@ export function wsToHttpBase(wsBase) {
         return "http://localhost:3001";
     }
 }
+/** Derive ws/wss base from the authenticated backend HTTP origin. */
+export function httpBaseToWsBase(httpBase) {
+    try {
+        const url = new URL(httpBase);
+        url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+        url.pathname = "/";
+        url.search = "";
+        url.hash = "";
+        return url.toString().replace(/\/+$/, "");
+    }
+    catch {
+        return "ws://localhost:3001";
+    }
+}
 export function buildEgressAudioWsUrl(params) {
     const pageUrl = params.meetUrl ?? "https://meet.google.com/";
     const wsBase = normalizeWsBase(params.baseWs, pageUrl);
@@ -75,6 +107,16 @@ export function buildEgressAudioWsUrl(params) {
     url.searchParams.set("track", track);
     url.searchParams.set("sampleRate", String(sampleRate > 0 ? sampleRate : 16000));
     url.searchParams.set("channels", String(channels > 0 ? channels : 1));
+    if (params.token) {
+        url.searchParams.set("token", params.token);
+    }
+    if (params.tenantId) {
+        url.searchParams.set("tenantId", sanitize(params.tenantId));
+    }
+    const participantRole = normalizeParticipantRole(params.participantRole);
+    if (participantRole) {
+        url.searchParams.set("participantRole", participantRole);
+    }
     return url.toString();
 }
 export function getEgressDefaults(cfg) {
@@ -84,6 +126,7 @@ export function getEgressDefaults(cfg) {
         sampleRate: cfg.DEFAULT_SAMPLE_RATE,
         channels: cfg.DEFAULT_CHANNELS,
         participant: "browser",
+        participantRole: "host",
         track: "tab-audio",
     };
 }

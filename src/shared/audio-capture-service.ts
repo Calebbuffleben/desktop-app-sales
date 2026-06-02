@@ -305,23 +305,26 @@ export class DesktopAudioCaptureService {
         resolve();
       };
 
-      ws.onerror = (event: Event) => {
-        const description =
-          event instanceof ErrorEvent && event.message
-            ? event.message
-            : "Failed to connect egress websocket";
-        this.setWsState({
-          status: "error",
-          lastError: description,
-        });
-        if (!settled) {
-          settled = true;
-          this.connectingPromise = null;
-          reject(new Error(description));
+      ws.onerror = () => {
+        if (this.debug) {
+          this.log("WS error event (awaiting close for details)");
         }
       };
 
       ws.onclose = (event: CloseEvent) => {
+        if (!settled) {
+          settled = true;
+          this.connectingPromise = null;
+          const detail =
+            event.reason?.trim() ||
+            (event.code ? `close code ${event.code}` : "connection refused");
+          this.setWsState({
+            status: "error",
+            lastError: detail,
+          });
+          reject(new Error(`Egress websocket failed: ${detail}`));
+          return;
+        }
         if (this.debug) {
           this.log(
             `WS closed | code=${event.code} | reason=${event.reason || "n/a"}`,

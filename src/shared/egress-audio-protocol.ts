@@ -54,6 +54,18 @@ export function extractMeetRoomCode(meetUrl?: string): string {
   }
 }
 
+/** Canonical meeting id for audio egress + Socket.IO feedback room. */
+export function resolveEffectiveMeetingId(
+  meetUrl?: string,
+  meetingId?: string,
+): string {
+  const trimmed = String(meetingId || "").trim();
+  if (trimmed) {
+    return sanitize(trimmed) || extractMeetRoomCode(meetUrl);
+  }
+  return extractMeetRoomCode(meetUrl);
+}
+
 export function normalizeWsBase(baseWs: string, pageUrl?: string): string {
   let normalized = String(baseWs || "").trim();
   const isSecurePage = /^https:\/\//i.test(String(pageUrl || ""));
@@ -85,6 +97,20 @@ export function wsToHttpBase(wsBase: string): string {
     return url.toString().replace(/\/+$/, "");
   } catch {
     return "http://localhost:3001";
+  }
+}
+
+/** Derive ws/wss base from the authenticated backend HTTP origin. */
+export function httpBaseToWsBase(httpBase: string): string {
+  try {
+    const url = new URL(httpBase);
+    url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+    url.pathname = "/";
+    url.search = "";
+    url.hash = "";
+    return url.toString().replace(/\/+$/, "");
+  } catch {
+    return "ws://localhost:3001";
   }
 }
 

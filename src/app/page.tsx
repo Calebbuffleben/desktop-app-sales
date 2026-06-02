@@ -13,6 +13,7 @@ import {
   DesktopFeedbackClient,
   type FeedbackConnectionState,
 } from "@/shared/feedback-client";
+import { httpBaseToWsBase, resolveEffectiveMeetingId } from "@/shared/egress-audio-protocol";
 import { SessionGate } from "@/shared/session-gate";
 import { useAuth } from "@/shared/auth-context";
 
@@ -302,13 +303,17 @@ function HomeAuthenticated() {
     };
   }, [captureService]);
 
+  const effectiveMeetingId = resolveEffectiveMeetingId(meetUrl, meetingId);
+  const effectiveFeedbackBase =
+    session.backendHttpBase || feedbackBase || "http://localhost:3001";
+
   useEffect(() => {
-    if (!isBridgeAvailable || !meetingId || !feedbackBase) return;
+    if (!isBridgeAvailable || !effectiveMeetingId || !effectiveFeedbackBase) return;
     if (!session.isAuthenticated || !session.tenant) return;
     const client = new DesktopFeedbackClient({
-      meetingId,
+      meetingId: effectiveMeetingId,
       tenantId: session.tenant.id,
-      httpBase: feedbackBase,
+      httpBase: effectiveFeedbackBase,
       getAccessToken: async () =>
         (await window.desktopApi?.getAccessToken?.()) ?? null,
       onFeedback: () => {},
@@ -326,12 +331,13 @@ function HomeAuthenticated() {
     };
   }, [
     isBridgeAvailable,
-    meetingId,
-    feedbackBase,
+    effectiveMeetingId,
+    effectiveFeedbackBase,
     forcePolling,
     debugLogs,
     session.isAuthenticated,
     session.tenant,
+    session.backendHttpBase,
   ]);
 
   async function handleStartCapture(): Promise<void> {
@@ -348,10 +354,27 @@ function HomeAuthenticated() {
       const tenantId = session.tenant.id;
       const operatorParticipant =
         participant.trim() || session.user?.id || "desktop";
+      const wsBase = session.backendHttpBase
+        ? httpBaseToWsBase(session.backendHttpBase)
+        : config.BACKEND_WS_BASE;
+      const captureConfig: DesktopConfig = {
+        ...config,
+        BACKEND_WS_BASE: wsBase,
+      };
+      const resolvedMeetingId = resolveEffectiveMeetingId(meetUrl, meetingId);
+      const resolvedFeedbackBase = session.backendHttpBase || feedbackBase;
+
+      await window.desktopApi.setFeedbackContext({
+        meetingId: resolvedMeetingId,
+        feedbackHttpBase: resolvedFeedbackBase,
+      });
+      setMeetingId(resolvedMeetingId);
+      setFeedbackBase(resolvedFeedbackBase);
+
       const result = await captureService.start({
-        config,
+        config: captureConfig,
         meetUrl,
-        meetingId: meetingId || undefined,
+        meetingId: resolvedMeetingId,
         participant: operatorParticipant,
         participantRole: "host",
         track,

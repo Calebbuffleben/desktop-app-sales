@@ -144,6 +144,8 @@ export default function OverlayPage() {
   const [captureStatus, setCaptureStatus] = useState<CaptureStatus>("idle");
   const [meetingId, setMeetingId] = useState("abc-defg-hij");
   const [feedbackHttpBase, setFeedbackHttpBase] = useState("http://localhost:3001");
+  const effectiveFeedbackBase =
+    session.backendHttpBase || feedbackHttpBase || "http://localhost:3001";
   const [statusLine, setStatusLine] = useState("inicializando feedback…");
   const [items, setItems] = useState<OverlayItem[]>([]);
   const [isDismissed, setIsDismissed] = useState(false);
@@ -175,12 +177,12 @@ export default function OverlayPage() {
   }, []);
 
   useEffect(() => {
-    if (!meetingId || !feedbackHttpBase) return;
+    if (!meetingId || !effectiveFeedbackBase) return;
     if (!session.isAuthenticated || !session.tenant) return;
     const client = new DesktopFeedbackClient({
       meetingId,
       tenantId: session.tenant.id,
-      httpBase: feedbackHttpBase,
+      httpBase: effectiveFeedbackBase,
       getAccessToken: async () =>
         (await window.desktopApi?.getAccessToken?.()) ?? null,
       onStatus: (status) => setStatusLine(status),
@@ -197,7 +199,7 @@ export default function OverlayPage() {
     });
     void client.start();
     return () => client.stop();
-  }, [meetingId, feedbackHttpBase, session.isAuthenticated, session.tenant]);
+  }, [meetingId, effectiveFeedbackBase, session.isAuthenticated, session.tenant, session.backendHttpBase]);
 
   useEffect(() => {
     if (items.length === 0) return;
