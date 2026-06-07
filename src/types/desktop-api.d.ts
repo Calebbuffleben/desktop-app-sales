@@ -163,15 +163,6 @@ type DesktopApi = {
     email: string;
     password: string;
     tenantSlug?: string;
-    backendHttpBase: string;
-  }) => Promise<AuthSessionSnapshot>;
-  authRegister: (payload: {
-    email: string;
-    password: string;
-    tenantSlug?: string;
-    tenantName?: string;
-    name?: string;
-    backendHttpBase: string;
   }) => Promise<AuthSessionSnapshot>;
   authLogout: () => Promise<{ ok: true }>;
   authRefresh: () => Promise<AuthSessionSnapshot>;
@@ -213,7 +204,6 @@ type DesktopApi = {
     token: string;
     password: string;
     name?: string;
-    backendHttpBase: string;
   }) => Promise<AuthSessionSnapshot>;
   billingSubscription: () => Promise<SubscriptionSnapshot>;
   billingUpgrade: (payload: {

@@ -112,19 +112,18 @@ function ensureStringField(value: unknown, field: string): string {
   return value;
 }
 
-function sanitizeBackendBase(raw: unknown): string {
-  const value = ensureStringField(raw, "backendHttpBase");
-  try {
-    const parsed = new URL(value);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      throw new Error("backendHttpBase must be http(s)");
-    }
-    return parsed.origin;
-  } catch (err) {
-    throw new Error(
-      `invalid backendHttpBase: ${err instanceof Error ? err.message : String(err)}`,
-    );
+/** Backend origin from build config / env — never from renderer input. */
+function configuredBackendHttpBase(): string {
+  const fromState = appState.feedbackHttpBase.trim();
+  if (fromState) return fromState;
+  const fromConfig = wsToHttpBase(initialConfig.BACKEND_WS_BASE).trim();
+  if (fromConfig) {
+    appState.feedbackHttpBase = fromConfig;
+    return fromConfig;
   }
+  throw new Error(
+    "Backend URL not configured. Set BACKEND_WS_BASE in config/desktop-config.json.",
+  );
 }
 
 const isDev = !app.isPackaged;
@@ -951,7 +950,6 @@ function registerIpcHandlers(): void {
   ipcMain.handle("auth:login", async (_event, payload?: Record<string, unknown>) => {
     const email = ensureStringField(payload?.email, "email");
     const password = ensureStringField(payload?.password, "password");
-    const backendHttpBase = sanitizeBackendBase(payload?.backendHttpBase);
     const tenantSlug =
       typeof payload?.tenantSlug === "string" && payload.tenantSlug.trim() !== ""
         ? payload.tenantSlug
@@ -960,34 +958,7 @@ function registerIpcHandlers(): void {
       email,
       password,
       tenantSlug,
-      backendHttpBase,
-    });
-    return snapshot;
-  });
-
-  ipcMain.handle("auth:register", async (_event, payload?: Record<string, unknown>) => {
-    const email = ensureStringField(payload?.email, "email");
-    const password = ensureStringField(payload?.password, "password");
-    const backendHttpBase = sanitizeBackendBase(payload?.backendHttpBase);
-    const tenantSlug =
-      typeof payload?.tenantSlug === "string" && payload.tenantSlug.trim() !== ""
-        ? payload.tenantSlug
-        : undefined;
-    const tenantName =
-      typeof payload?.tenantName === "string" && payload.tenantName.trim() !== ""
-        ? payload.tenantName
-        : undefined;
-    const name =
-      typeof payload?.name === "string" && payload.name.trim() !== ""
-        ? payload.name
-        : undefined;
-    const snapshot = await authService.register({
-      email,
-      password,
-      tenantSlug,
-      tenantName,
-      name,
-      backendHttpBase,
+      backendHttpBase: configuredBackendHttpBase(),
     });
     return snapshot;
   });
@@ -1056,7 +1027,6 @@ function registerIpcHandlers(): void {
   ipcMain.handle("invites:accept-public", async (_event, payload?: Record<string, unknown>) => {
     const token = ensureStringField(payload?.token, "token");
     const password = ensureStringField(payload?.password, "password");
-    const backendHttpBase = sanitizeBackendBase(payload?.backendHttpBase);
     const name =
       typeof payload?.name === "string" && payload.name.trim() !== ""
         ? payload.name
@@ -1065,7 +1035,7 @@ function registerIpcHandlers(): void {
       token,
       password,
       name,
-      backendHttpBase,
+      backendHttpBase: configuredBackendHttpBase(),
     });
   });
 

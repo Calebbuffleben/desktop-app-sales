@@ -20,7 +20,6 @@ const ALLOWED_INVOKE_CHANNELS = new Set([
   "desktop:set-selected-source",
   "desktop:capture-error",
   "auth:login",
-  "auth:register",
   "auth:logout",
   "auth:refresh",
   "auth:get-session",
@@ -112,7 +111,6 @@ contextBridge.exposeInMainWorld(
     onSelectedSourceUpdated: (handler) =>
       onStrict("desktop:selected-source-updated", handler),
     authLogin: (payload) => invokeStrict("auth:login", payload),
-    authRegister: (payload) => invokeStrict("auth:register", payload),
     authLogout: () => invokeStrict("auth:logout"),
     authRefresh: () => invokeStrict("auth:refresh"),
     getAuthSession: () => invokeStrict("auth:get-session"),

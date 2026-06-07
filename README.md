@@ -179,12 +179,14 @@ ENABLE_FEEDBACK_TEST_ENDPOINT=true pnpm desktop:test:phase7
 O cliente desktop agora requer login antes de expor controles de captura ou
 overlay. Fluxo:
 
-- **Main process**: `electron/auth-service.ts` orquestra login/register/refresh/
-  logout contra os endpoints `/auth/*` do backend. Sessões são persistidas via
-  `electron/auth-storage.ts` usando `safeStorage` (keychain do SO); se o OS não
-  suportar encriptação o serviço se recusa a gravar.
+- **Main process**: `electron/auth-service.ts` orquestra login/refresh/logout e
+  aceite de convites contra os endpoints `/auth/*` e `/invites/*` do backend.
+  Sessões são persistidas via `electron/auth-storage.ts` usando `safeStorage`
+  (keychain do SO); se o OS não suportar encriptação o serviço se recusa a gravar.
+  **Sem auto-registro** — tenants/usuários são criados pelo painel admin; membros
+  entram por convite (`/accept-invite`).
 - **IPC**: canais allowlisted em `electron/preload.cjs` — `auth:login`,
-  `auth:register`, `auth:logout`, `auth:refresh`, `auth:get-session`,
+  `auth:logout`, `auth:refresh`, `auth:get-session`,
   `auth:get-access-token`, `auth:session-updated`. Renderer só enxerga esses.
 - **Renderer**: `src/shared/auth-context.tsx` (Provider global) +
   `src/shared/session-gate.tsx` gate-keepam toda a UI. `SessionGate` redireciona

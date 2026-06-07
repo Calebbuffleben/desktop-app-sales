@@ -21,15 +21,6 @@ interface AuthContextValue {
     email: string;
     password: string;
     tenantSlug?: string;
-    backendHttpBase: string;
-  }) => Promise<void>;
-  register: (input: {
-    email: string;
-    password: string;
-    tenantSlug?: string;
-    tenantName?: string;
-    name?: string;
-    backendHttpBase: string;
   }) => Promise<void>;
   logout: () => Promise<void>;
   refresh: () => Promise<void>;
@@ -97,13 +88,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     applySnapshot(snapshot);
   }, [applySnapshot]);
 
-  const register = useCallback<AuthContextValue["register"]>(async (input) => {
-    const api = window.desktopApi;
-    if (!api) throw new Error("desktop bridge unavailable");
-    const snapshot = await api.authRegister(input);
-    applySnapshot(snapshot);
-  }, [applySnapshot]);
-
   const logout = useCallback<AuthContextValue["logout"]>(async () => {
     const api = window.desktopApi;
     if (!api) return;
@@ -127,8 +111,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const value = useMemo<AuthContextValue>(
-    () => ({ status, session, login, register, logout, refresh, getAccessToken }),
-    [status, session, login, register, logout, refresh, getAccessToken],
+    () => ({ status, session, login, logout, refresh, getAccessToken }),
+    [status, session, login, logout, refresh, getAccessToken],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

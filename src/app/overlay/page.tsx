@@ -276,6 +276,9 @@ export default function OverlayPage() {
     setIsDismissed(true);
   }, []);
 
+  const effectiveFeedbackBase =
+    session.backendHttpBase || feedbackHttpBase || "http://localhost:3001";
+
   useEffect(() => {
     if (!meetingId || !effectiveFeedbackBase) return;
     if (!session.isAuthenticated || !session.tenant) return;

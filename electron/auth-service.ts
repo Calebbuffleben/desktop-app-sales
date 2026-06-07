@@ -12,11 +12,6 @@ interface LoginInput {
   backendHttpBase: string;
 }
 
-interface RegisterInput extends LoginInput {
-  tenantName?: string;
-  name?: string;
-}
-
 interface AcceptInvitePublicInput {
   token: string;
   password: string;
@@ -24,7 +19,7 @@ interface AcceptInvitePublicInput {
   backendHttpBase: string;
 }
 
-/** Shape returned by backend `/auth/login`, `/auth/register`, `/auth/refresh`. */
+/** Shape returned by backend `/auth/login`, `/auth/refresh`. */
 interface BackendAuthSession {
   accessToken: string;
   refreshToken: string;
@@ -141,22 +136,6 @@ export class DesktopAuthService extends EventEmitter {
         email: input.email,
         password: input.password,
         tenantSlug: input.tenantSlug,
-      },
-    );
-    this.assignSession(response, input.backendHttpBase);
-    return this.snapshot();
-  }
-
-  async register(input: RegisterInput): Promise<SessionSnapshot> {
-    const response = await fetchBackend(
-      input.backendHttpBase,
-      "/auth/register",
-      {
-        email: input.email,
-        password: input.password,
-        tenantSlug: input.tenantSlug,
-        tenantName: input.tenantName,
-        name: input.name,
       },
     );
     this.assignSession(response, input.backendHttpBase);

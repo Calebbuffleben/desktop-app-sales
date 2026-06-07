@@ -72,17 +72,6 @@ export class DesktopAuthService extends EventEmitter {
         this.assignSession(response, input.backendHttpBase);
         return this.snapshot();
     }
-    async register(input) {
-        const response = await fetchBackend(input.backendHttpBase, "/auth/register", {
-            email: input.email,
-            password: input.password,
-            tenantSlug: input.tenantSlug,
-            tenantName: input.tenantName,
-            name: input.name,
-        });
-        this.assignSession(response, input.backendHttpBase);
-        return this.snapshot();
-    }
     /**
      * Return a valid access token, refreshing proactively if within the
      * `PROACTIVE_REFRESH_WINDOW_SECONDS` expiration buffer.

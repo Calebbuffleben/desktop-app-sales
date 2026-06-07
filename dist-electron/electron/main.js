@@ -6,12 +6,15 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import updater from "electron-updater";
 import { loadDesktopConfig } from "../src/shared/desktop-config.js";
+import { isHttpsUrlAllowedForPlaybook, parsePlaybookUrlAllowlistEnv, } from "../src/shared/playbook-url-allowlist.js";
 import { buildEgressAudioWsUrl, buildPcm16SilentFrame, getEgressDefaults, httpBaseToWsBase, normalizeParticipantRole, wsToHttpBase, } from "../src/shared/egress-audio-protocol.js";
 import WebSocket from "ws";
 import { DesktopAuthService } from "./auth-service.js";
 const { app, BrowserWindow, desktopCapturer, ipcMain, screen, session, shell, systemPreferences, } = electron;
 const { autoUpdater } = updater;
 const initialConfig = loadDesktopConfig({ baseDir: app.getAppPath() });
+/** Same CSV env as backend `PLAYBOOK_URL_ALLOWLIST`; used only for overlay “open link” actions. */
+const playbookExternalUrlAllowlist = parsePlaybookUrlAllowlistEnv(process.env.PLAYBOOK_URL_ALLOWLIST);
 const appState = {
     captureStatus: "idle",
     clickThrough: false,
@@ -64,18 +67,17 @@ function ensureStringField(value, field) {
     }
     return value;
 }
-function sanitizeBackendBase(raw) {
-    const value = ensureStringField(raw, "backendHttpBase");
-    try {
-        const parsed = new URL(value);
-        if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-            throw new Error("backendHttpBase must be http(s)");
-        }
-        return parsed.origin;
+/** Backend origin from build config / env — never from renderer input. */
+function configuredBackendHttpBase() {
+    const fromState = appState.feedbackHttpBase.trim();
+    if (fromState)
+        return fromState;
+    const fromConfig = wsToHttpBase(initialConfig.BACKEND_WS_BASE).trim();
+    if (fromConfig) {
+        appState.feedbackHttpBase = fromConfig;
+        return fromConfig;
     }
-    catch (err) {
-        throw new Error(`invalid backendHttpBase: ${err instanceof Error ? err.message : String(err)}`);
-    }
+    throw new Error("Backend URL not configured. Set BACKEND_WS_BASE in config/desktop-config.json.");
 }
 const isDev = !app.isPackaged;
 const devServerUrl = process.env.NEXT_DEV_SERVER_URL ?? "http://localhost:3210";
@@ -513,6 +515,30 @@ function registerIpcHandlers() {
         setOverlayWindowVisible(visible);
         return { ok: true, visible };
     });
+    ipcMain.handle("desktop:open-external", async (_event, payload) => {
+        const raw = typeof payload?.url === "string" ? payload.url.trim() : "";
+        if (!raw || !isHttpsUrlAllowedForPlaybook(raw, playbookExternalUrlAllowlist)) {
+            addLog(`open-external blocked | url=${raw.slice(0, 96)}`);
+            return { ok: false, error: "blocked_or_invalid" };
+        }
+        try {
+            await shell.openExternal(raw);
+            let host = "";
+            try {
+                host = new URL(raw).hostname;
+            }
+            catch {
+                host = "";
+            }
+            addLog(`open-external ok | host=${host}`);
+            return { ok: true };
+        }
+        catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            addLog(`open-external error: ${msg}`);
+            return { ok: false, error: msg };
+        }
+    });
     ipcMain.handle("desktop:get-permission-policy", async () => {
         const platform = process.platform;
         const microphoneStatus = typeof systemPreferences.getMediaAccessStatus === "function"
@@ -784,7 +810,6 @@ function registerIpcHandlers() {
     ipcMain.handle("auth:login", async (_event, payload) => {
         const email = ensureStringField(payload?.email, "email");
         const password = ensureStringField(payload?.password, "password");
-        const backendHttpBase = sanitizeBackendBase(payload?.backendHttpBase);
         const tenantSlug = typeof payload?.tenantSlug === "string" && payload.tenantSlug.trim() !== ""
             ? payload.tenantSlug
             : undefined;
@@ -792,30 +817,7 @@ function registerIpcHandlers() {
             email,
             password,
             tenantSlug,
-            backendHttpBase,
-        });
-        return snapshot;
-    });
-    ipcMain.handle("auth:register", async (_event, payload) => {
-        const email = ensureStringField(payload?.email, "email");
-        const password = ensureStringField(payload?.password, "password");
-        const backendHttpBase = sanitizeBackendBase(payload?.backendHttpBase);
-        const tenantSlug = typeof payload?.tenantSlug === "string" && payload.tenantSlug.trim() !== ""
-            ? payload.tenantSlug
-            : undefined;
-        const tenantName = typeof payload?.tenantName === "string" && payload.tenantName.trim() !== ""
-            ? payload.tenantName
-            : undefined;
-        const name = typeof payload?.name === "string" && payload.name.trim() !== ""
-            ? payload.name
-            : undefined;
-        const snapshot = await authService.register({
-            email,
-            password,
-            tenantSlug,
-            tenantName,
-            name,
-            backendHttpBase,
+            backendHttpBase: configuredBackendHttpBase(),
         });
         return snapshot;
     });
@@ -878,7 +880,6 @@ function registerIpcHandlers() {
     ipcMain.handle("invites:accept-public", async (_event, payload) => {
         const token = ensureStringField(payload?.token, "token");
         const password = ensureStringField(payload?.password, "password");
-        const backendHttpBase = sanitizeBackendBase(payload?.backendHttpBase);
         const name = typeof payload?.name === "string" && payload.name.trim() !== ""
             ? payload.name
             : undefined;
@@ -886,13 +887,30 @@ function registerIpcHandlers() {
             token,
             password,
             name,
-            backendHttpBase,
+            backendHttpBase: configuredBackendHttpBase(),
         });
     });
     ipcMain.handle("billing:subscription", async () => authedJson("GET", "/billing/subscription"));
     ipcMain.handle("billing:upgrade", async (_event, payload) => {
         const plan = ensureStringField(payload?.plan, "plan");
         return authedJson("POST", "/billing/upgrade", { plan });
+    });
+    ipcMain.handle("playbooks:list", async () => authedJson("GET", "/playbooks"));
+    ipcMain.handle("playbooks:create", async (_event, payload) => {
+        if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+            throw new Error("playbooks:create requires a JSON body object");
+        }
+        return authedJson("POST", "/playbooks", payload);
+    });
+    ipcMain.handle("playbooks:update", async (_event, payload) => {
+        const id = ensureStringField(payload?.id, "id");
+        const rest = { ...(payload ?? {}) };
+        delete rest.id;
+        return authedJson("PATCH", `/playbooks/${encodeURIComponent(id)}`, rest);
+    });
+    ipcMain.handle("playbooks:remove", async (_event, payload) => {
+        const id = ensureStringField(payload?.id, "id");
+        return authedJson("DELETE", `/playbooks/${encodeURIComponent(id)}`);
     });
 }
 /**

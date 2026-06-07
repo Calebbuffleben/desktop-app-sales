@@ -24,9 +24,6 @@ function AcceptInviteScreen() {
   const [token, setToken] = useState("");
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
-  const [backendHttpBase, setBackendHttpBase] = useState(
-    "https://backend-analysis-production-a688.up.railway.app",
-  );
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -35,9 +32,6 @@ function AcceptInviteScreen() {
     if (typeof window === "undefined") return;
     const api = window.desktopApi;
     if (!api) return;
-    void api.getAuthSession().then((snap) => {
-      if (snap.backendHttpBase) setBackendHttpBase(snap.backendHttpBase);
-    });
     if (typeof window !== "undefined") {
       const queryToken = new URLSearchParams(window.location.search).get(
         "token",
@@ -75,7 +69,6 @@ function AcceptInviteScreen() {
         token: token.trim(),
         password,
         name: name.trim() || undefined,
-        backendHttpBase: backendHttpBase.trim(),
       });
       router.replace("/");
     } catch (err) {
@@ -120,15 +113,6 @@ function AcceptInviteScreen() {
           </label>
           {!isAuthenticated ? (
             <>
-              <label className={labelCls}>
-                Backend HTTP base
-                <input
-                  className={field}
-                  value={backendHttpBase}
-                  onChange={(e) => setBackendHttpBase(e.target.value)}
-                  required
-                />
-              </label>
               <label className={labelCls}>
                 Defina sua senha
                 <input
