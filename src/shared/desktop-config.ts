@@ -8,6 +8,8 @@ export type DesktopConfig = {
   DEFAULT_CHANNELS: number;
   ALLOW_SCRIPT_PROCESSOR_FALLBACK: boolean;
   ALLOW_AUDIOWORKLET_FALLBACK: boolean;
+  TAB_AUDIO_GATE_ENABLED: boolean;
+  TAB_AUDIO_GATE_DBFS: number;
 };
 
 const DEFAULT_CONFIG: DesktopConfig = {
@@ -17,6 +19,8 @@ const DEFAULT_CONFIG: DesktopConfig = {
   DEFAULT_CHANNELS: 1,
   ALLOW_SCRIPT_PROCESSOR_FALLBACK: true,
   ALLOW_AUDIOWORKLET_FALLBACK: true,
+  TAB_AUDIO_GATE_ENABLED: false,
+  TAB_AUDIO_GATE_DBFS: -45,
 };
 
 function parseBool(value: string | undefined, fallback: boolean): boolean {
@@ -31,6 +35,12 @@ function parseNumber(value: string | undefined, fallback: number): number {
   if (!value) return fallback;
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function parseSignedNumber(value: string | undefined, fallback: number): number {
+  if (!value) return fallback;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
 }
 
 type LoadOptions = {
@@ -83,6 +93,14 @@ export function loadDesktopConfig(options: LoadOptions = {}): DesktopConfig {
       process.env.ALLOW_AUDIOWORKLET_FALLBACK,
       fromFile.ALLOW_AUDIOWORKLET_FALLBACK ??
         DEFAULT_CONFIG.ALLOW_AUDIOWORKLET_FALLBACK,
+    ),
+    TAB_AUDIO_GATE_ENABLED: parseBool(
+      process.env.TAB_AUDIO_GATE_ENABLED,
+      fromFile.TAB_AUDIO_GATE_ENABLED ?? DEFAULT_CONFIG.TAB_AUDIO_GATE_ENABLED,
+    ),
+    TAB_AUDIO_GATE_DBFS: parseSignedNumber(
+      process.env.TAB_AUDIO_GATE_DBFS,
+      fromFile.TAB_AUDIO_GATE_DBFS ?? DEFAULT_CONFIG.TAB_AUDIO_GATE_DBFS,
     ),
   };
 }

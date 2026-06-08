@@ -87,6 +87,21 @@ function rmsOfFloat32(buffer: Float32Array<ArrayBufferLike>): number {
   return Math.sqrt(sum / buffer.length);
 }
 
+function rmsOfInt16(buffer: Int16Array): number {
+  if (buffer.length === 0) return 0;
+  let sum = 0;
+  for (let i = 0; i < buffer.length; i += 1) {
+    const sample = buffer[i] / 0x8000;
+    sum += sample * sample;
+  }
+  return Math.sqrt(sum / buffer.length);
+}
+
+function linearRmsToDbfs(rms: number): number {
+  if (rms <= 0) return -120;
+  return 20 * Math.log10(rms);
+}
+
 function matrixForMvp(platform: CapturePlatform): string {
   if (platform === "macos") {
     return "macOS: loopback nativo via ScreenCaptureKit (Electron 28+) quando possivel, mais microfone.";
@@ -217,6 +232,8 @@ export class DesktopAudioCaptureService {
     framesSent: 0,
     lastFrameTs: 0,
   };
+  private tabAudioGateEnabled = false;
+  private tabAudioGateDbfs = -45;
 
   constructor(
     onLog?: (message: string) => void,
@@ -527,9 +544,20 @@ export class DesktopAudioCaptureService {
 
   private sendFrame(pcm: Int16Array): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-    this.ws.send(pcm.buffer);
+    let outbound = pcm;
+    const track = this.baseWsParams?.track?.toLowerCase() ?? "";
+    if (
+      this.tabAudioGateEnabled &&
+      (track === "tab-audio" || this.baseWsParams?.participantRole === "participant")
+    ) {
+      const dbfs = linearRmsToDbfs(rmsOfInt16(pcm));
+      if (dbfs < this.tabAudioGateDbfs) {
+        outbound = new Int16Array(pcm.length);
+      }
+    }
+    this.ws.send(outbound.buffer);
     this.emitMeter({
-      bytesSent: this.meter.bytesSent + pcm.byteLength,
+      bytesSent: this.meter.bytesSent + outbound.byteLength,
       framesSent: this.meter.framesSent + 1,
       lastFrameTs: Date.now(),
     });
@@ -565,6 +593,8 @@ export class DesktopAudioCaptureService {
       channels,
       tenantId: input.tenantId,
     };
+    this.tabAudioGateEnabled = Boolean(input.config.TAB_AUDIO_GATE_ENABLED);
+    this.tabAudioGateDbfs = input.config.TAB_AUDIO_GATE_DBFS;
     this.getAccessToken = input.getAccessToken;
     this.wsUrl = "";
     this.status = "starting";

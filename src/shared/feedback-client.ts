@@ -136,6 +136,15 @@ export class DesktopFeedbackClient {
     if (typeof latency === "number") {
       this.setState({ lastLatencyMs: latency });
     }
+    if (this.opts.debug) {
+      console.log("[client.feedback_received]", {
+        id: payload.id,
+        receivedAtMs: Date.now(),
+        serverTs: payload.ts,
+        latencyMs: latency,
+        type: payload.type,
+      });
+    }
     this.opts.onFeedback(payload);
   }
 
