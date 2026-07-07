@@ -93,6 +93,7 @@ type DesktopApi = {
   stopCapture: () => Promise<{ ok: true; captureStatus: "idle" }>;
   setClickThrough: (enabled: boolean) => Promise<{ ok: true; clickThrough: boolean }>;
   setOverlayWindowVisible: (visible: boolean) => Promise<{ ok: true; visible: boolean }>;
+  setOverlayContentHeight: (height: number) => Promise<{ ok: true; height: number }>;
   /** Open https URLs only; hostname must match `PLAYBOOK_URL_ALLOWLIST` (same CSV as backend). */
   openExternalUrl: (url: string) => Promise<{ ok: boolean; error?: string }>;
   setFeedbackContext: (payload: {

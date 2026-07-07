@@ -7,6 +7,8 @@ const DEFAULT_CONFIG = {
     DEFAULT_CHANNELS: 1,
     ALLOW_SCRIPT_PROCESSOR_FALLBACK: true,
     ALLOW_AUDIOWORKLET_FALLBACK: true,
+    TAB_AUDIO_GATE_ENABLED: false,
+    TAB_AUDIO_GATE_DBFS: -45,
 };
 function parseBool(value, fallback) {
     if (!value)
@@ -23,6 +25,12 @@ function parseNumber(value, fallback) {
         return fallback;
     const parsed = Number(value);
     return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+function parseSignedNumber(value, fallback) {
+    if (!value)
+        return fallback;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : fallback;
 }
 function readJsonConfigFile(baseDir) {
     const configFile = path.resolve(baseDir, "config/desktop-config.json");
@@ -53,5 +61,7 @@ export function loadDesktopConfig(options = {}) {
             DEFAULT_CONFIG.ALLOW_SCRIPT_PROCESSOR_FALLBACK),
         ALLOW_AUDIOWORKLET_FALLBACK: parseBool(process.env.ALLOW_AUDIOWORKLET_FALLBACK, fromFile.ALLOW_AUDIOWORKLET_FALLBACK ??
             DEFAULT_CONFIG.ALLOW_AUDIOWORKLET_FALLBACK),
+        TAB_AUDIO_GATE_ENABLED: parseBool(process.env.TAB_AUDIO_GATE_ENABLED, fromFile.TAB_AUDIO_GATE_ENABLED ?? DEFAULT_CONFIG.TAB_AUDIO_GATE_ENABLED),
+        TAB_AUDIO_GATE_DBFS: parseSignedNumber(process.env.TAB_AUDIO_GATE_DBFS, fromFile.TAB_AUDIO_GATE_DBFS ?? DEFAULT_CONFIG.TAB_AUDIO_GATE_DBFS),
     };
 }
