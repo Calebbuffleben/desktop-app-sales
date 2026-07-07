@@ -89,6 +89,7 @@ const allowedConnectOrigins = new Set([
     "'self'",
     "http://localhost:3001",
     "ws://localhost:3001",
+    "http://127.0.0.1:39201",
 ]);
 function registerBackendConnectOrigins(httpBase) {
     try {
@@ -156,34 +157,37 @@ function setOverlayAnchorMode(mode) {
         });
     }
 }
+/**
+ * Overlay toast position is controlled in two layers:
+ * 1. Main process: window covers the full workArea (transparent).
+ * 2. Renderer (/overlay): CSS pins the card stack to bottom-right of that viewport.
+ *
+ * Do NOT use small setBounds windows + CSS bottom — a 520px-tall window anchored at
+ * y=24 places the card at ~middle of the screen even with `fixed bottom` in CSS.
+ */
+function applyOverlayFullscreen() {
+    if (!overlayWindow || overlayWindow.isDestroyed())
+        return;
+    const { workArea } = screen.getPrimaryDisplay();
+    overlayWindow.setBounds({
+        x: Math.round(workArea.x),
+        y: Math.round(workArea.y),
+        width: Math.round(workArea.width),
+        height: Math.round(workArea.height),
+    });
+}
 /** Hide the overlay BrowserWindow when there is nothing to show — transparent windows still reserve a compositor layer. */
 function setOverlayWindowVisible(visible) {
     if (!overlayWindow || overlayWindow.isDestroyed())
         return;
     if (visible) {
+        applyOverlayFullscreen();
         overlayWindow.showInactive();
+        addLog("Overlay shown | fullscreen workArea (cards via CSS bottom-right)");
     }
     else {
         overlayWindow.hide();
     }
-}
-const OVERLAY_WIDTH = 380;
-/** Tall enough for stacked tip toasts (see overlay/page.tsx). */
-const OVERLAY_HEIGHT = 520;
-function ensureOverlayPosition() {
-    if (!overlayWindow || overlayWindow.isDestroyed())
-        return;
-    const { workArea } = screen.getPrimaryDisplay();
-    const x = Math.round(workArea.x + workArea.width - OVERLAY_WIDTH - 24);
-    const y = Math.round(workArea.y + 24);
-    overlayWindow.setBounds({ x, y, width: OVERLAY_WIDTH, height: OVERLAY_HEIGHT });
-}
-function positionOverlayFromAnchor(bounds) {
-    if (!overlayWindow || overlayWindow.isDestroyed())
-        return;
-    const x = Math.round(bounds.x + bounds.width - OVERLAY_WIDTH - 18);
-    const y = Math.round(bounds.y + 18);
-    overlayWindow.setBounds({ x, y, width: OVERLAY_WIDTH, height: OVERLAY_HEIGHT });
 }
 async function getMeetBoundsFromMacChrome() {
     try {
@@ -269,11 +273,9 @@ function startOverlayAnchoring() {
         void (async () => {
             const meetBounds = await detectActiveMeetWindowBounds();
             if (meetBounds) {
-                positionOverlayFromAnchor(meetBounds);
                 setOverlayAnchorMode("meet-window");
                 return;
             }
-            ensureOverlayPosition();
             setOverlayAnchorMode("fixed");
         })();
     }, 1200);
@@ -296,8 +298,8 @@ async function createWindows() {
         },
     });
     overlayWindow = new BrowserWindow({
-        width: OVERLAY_WIDTH,
-        height: OVERLAY_HEIGHT,
+        width: 400,
+        height: 200,
         show: false,
         frame: false,
         transparent: true,
@@ -327,9 +329,13 @@ async function createWindows() {
     };
     hardenWindow(controlWindow);
     hardenWindow(overlayWindow);
-    ensureOverlayPosition();
     overlayWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
     setOverlayClickThrough(appState.clickThrough);
+    screen.on("display-metrics-changed", () => {
+        if (overlayWindow && !overlayWindow.isDestroyed() && overlayWindow.isVisible()) {
+            applyOverlayFullscreen();
+        }
+    });
     const resolveExportedRoute = (route) => {
         const baseOut = path.join(app.getAppPath(), "out");
         const normalized = route.replace(/^\/+/, "");

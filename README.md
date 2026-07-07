@@ -101,9 +101,9 @@ Feedback em tempo real no overlay com paridade funcional da extensão:
 
 Implementada no processo principal (`electron/main.ts`):
 
-- detecção periódica da janela ativa do Meet
-- sincronização da posição do overlay no canto superior direito da janela detectada
-- fallback automático para posição fixa de tela quando a detecção falha
+- detecção periódica da janela ativa do Meet (indicador `anchorMode` na UI de controle)
+- posição do toast: janela overlay em fullscreen transparente + CSS `bottom-right` no renderer (canto inferior direito do **desktop**)
+- fallback `fixed` quando a detecção do Meet falha (mesma posição — não reposiciona a janela)
 
 Estratégia de detecção:
 
