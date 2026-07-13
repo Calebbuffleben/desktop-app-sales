@@ -8,6 +8,7 @@ const ALLOWED_INVOKE_CHANNELS = new Set([
   "desktop:set-overlay-window-visible",
   "desktop:open-external",
   "desktop:set-feedback-context",
+  "desktop:publish-direct-feedback",
   "desktop:protocol-preview",
   "desktop:protocol-validate",
   "desktop:get-permission-policy",
@@ -38,10 +39,21 @@ const ALLOWED_INVOKE_CHANNELS = new Set([
   "playbooks:create",
   "playbooks:update",
   "playbooks:remove",
+  "acoustic:get-corpus-dir",
+  "acoustic:save-corpus",
+  "seller-rooms:list",
+  "seller-rooms:get",
+  "seller-rooms:create",
+  "seller-rooms:invite",
+  "seller-rooms:accept",
+  "seller-rooms:join",
+  "seller-rooms:leave",
+  "seller-rooms:end",
 ]);
 
 const ALLOWED_LISTEN_CHANNELS = new Set([
   "desktop:feedback-context-updated",
+  "desktop:direct-feedback",
   "desktop:anchor-mode-updated",
   "desktop:update-status",
   "desktop:logs",
@@ -89,6 +101,8 @@ contextBridge.exposeInMainWorld(
       invokeStrict("desktop:open-external", { url: String(url || "") }),
     setFeedbackContext: (payload) =>
       invokeStrict("desktop:set-feedback-context", ensureObjectOrUndefined(payload)),
+    publishDirectFeedback: (payload) =>
+      invokeStrict("desktop:publish-direct-feedback", ensureObjectOrUndefined(payload)),
     protocolPreview: (payload) => invokeStrict("desktop:protocol-preview", payload),
     protocolValidate: (payload) => invokeStrict("desktop:protocol-validate", payload),
     getPermissionPolicy: () => invokeStrict("desktop:get-permission-policy"),
@@ -104,6 +118,7 @@ contextBridge.exposeInMainWorld(
       invokeStrict("desktop:capture-error", ensureObjectOrUndefined(payload)),
     onFeedbackContextUpdated: (handler) =>
       onStrict("desktop:feedback-context-updated", handler),
+    onDirectFeedback: (handler) => onStrict("desktop:direct-feedback", handler),
     onAnchorModeUpdated: (handler) => onStrict("desktop:anchor-mode-updated", handler),
     onUpdateStatus: (handler) => onStrict("desktop:update-status", handler),
     onLogs: (handler) => onStrict("desktop:logs", handler),
@@ -130,5 +145,23 @@ contextBridge.exposeInMainWorld(
     playbooksCreate: (payload) => invokeStrict("playbooks:create", ensureObjectOrUndefined(payload)),
     playbooksUpdate: (payload) => invokeStrict("playbooks:update", ensureObjectOrUndefined(payload)),
     playbooksRemove: (payload) => invokeStrict("playbooks:remove", ensureObjectOrUndefined(payload)),
+    getAcousticCorpusDir: () => invokeStrict("acoustic:get-corpus-dir"),
+    saveAcousticCorpus: (payload) =>
+      invokeStrict("acoustic:save-corpus", ensureObjectOrUndefined(payload)),
+    sellerRoomsList: () => invokeStrict("seller-rooms:list"),
+    sellerRoomsGet: (payload) =>
+      invokeStrict("seller-rooms:get", ensureObjectOrUndefined(payload)),
+    sellerRoomsCreate: (payload) =>
+      invokeStrict("seller-rooms:create", ensureObjectOrUndefined(payload)),
+    sellerRoomsInvite: (payload) =>
+      invokeStrict("seller-rooms:invite", ensureObjectOrUndefined(payload)),
+    sellerRoomsAccept: (payload) =>
+      invokeStrict("seller-rooms:accept", ensureObjectOrUndefined(payload)),
+    sellerRoomsJoin: (payload) =>
+      invokeStrict("seller-rooms:join", ensureObjectOrUndefined(payload)),
+    sellerRoomsLeave: (payload) =>
+      invokeStrict("seller-rooms:leave", ensureObjectOrUndefined(payload)),
+    sellerRoomsEnd: (payload) =>
+      invokeStrict("seller-rooms:end", ensureObjectOrUndefined(payload)),
   }),
 );

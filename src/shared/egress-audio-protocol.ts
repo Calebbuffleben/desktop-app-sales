@@ -33,6 +33,10 @@ export type EgressAudioParams = {
   /** Optional tenant id for redundant validation — backend will `PERMISSION_DENIED`
    * on mismatch against the token's `tid` claim. */
   tenantId?: string;
+  /** Active Seller Room id (static for the connection). */
+  sellerRoomId?: string;
+  /** PCM framing version: 1 = raw Int16, 2 = envelope with acoustic labels. */
+  pcmVersion?: 1 | 2;
 };
 
 function sanitize(value: string): string {
@@ -149,6 +153,12 @@ export function buildEgressAudioWsUrl(params: EgressAudioParams): string {
   const participantRole = normalizeParticipantRole(params.participantRole);
   if (participantRole) {
     url.searchParams.set("participantRole", participantRole);
+  }
+  if (params.sellerRoomId) {
+    url.searchParams.set("sellerRoomId", sanitize(params.sellerRoomId));
+  }
+  if (params.pcmVersion === 2) {
+    url.searchParams.set("pcmVersion", "2");
   }
   return url.toString();
 }

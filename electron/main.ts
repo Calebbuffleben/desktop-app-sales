@@ -90,7 +90,7 @@ function broadcastFeedbackContext(): void {
 function syncFeedbackHttpBaseFromAuth(httpBase: string | null | undefined): void {
   if (!httpBase) return;
   appState.feedbackHttpBase = httpBase;
-  registerBackendConnectOrigins(httpBase);
+  registerConnectOrigins(httpBase);
   broadcastFeedbackContext();
 }
 
@@ -110,6 +110,19 @@ function ensureStringField(value: unknown, field: string): string {
     throw new Error(`missing field: ${field}`);
   }
   return value;
+}
+
+function toUint8Array(value: unknown, field: string): Uint8Array {
+  if (value instanceof Uint8Array) {
+    return value;
+  }
+  if (value instanceof ArrayBuffer) {
+    return new Uint8Array(value);
+  }
+  if (Array.isArray(value)) {
+    return Uint8Array.from(value);
+  }
+  throw new Error(`missing or invalid field: ${field}`);
 }
 
 /** Backend origin from build config / env — never from renderer input. */
@@ -140,7 +153,7 @@ const allowedConnectOrigins = new Set<string>([
   "http://127.0.0.1:39201",
 ]);
 
-function registerBackendConnectOrigins(httpBase: string): void {
+function registerConnectOrigins(httpBase: string): void {
   try {
     const httpUrl = new URL(httpBase);
     allowedConnectOrigins.add(httpUrl.origin);
@@ -152,7 +165,10 @@ function registerBackendConnectOrigins(httpBase: string): void {
 }
 
 try {
-  registerBackendConnectOrigins(wsToHttpBase(initialConfig.BACKEND_WS_BASE));
+  registerConnectOrigins(wsToHttpBase(initialConfig.BACKEND_WS_BASE));
+  if (initialConfig.PYTHON_DIRECT_ENABLED && initialConfig.PYTHON_WS_BASE) {
+    registerConnectOrigins(wsToHttpBase(initialConfig.PYTHON_WS_BASE));
+  }
 } catch {
   /* ignore */
 }
@@ -432,6 +448,22 @@ function registerIpcHandlers(): void {
       update: appState.update,
     };
   });
+
+  ipcMain.handle(
+    "desktop:publish-direct-feedback",
+    (_event, payload?: Record<string, unknown>) => {
+      if (!payload || typeof payload !== "object") {
+        throw new Error("direct feedback payload must be an object");
+      }
+      if (overlayWindow && !overlayWindow.isDestroyed()) {
+        overlayWindow.webContents.send("desktop:direct-feedback", payload);
+      }
+      addLog(
+        `Direct feedback forwarded | meetingId=${String(payload.meetingId || "n/a")} | id=${String(payload.id || "n/a")}`,
+      );
+      return { ok: true as const };
+    },
+  );
 
   ipcMain.handle("desktop:check-capture-readiness", async () => {
     const platform = process.platform;
@@ -1073,6 +1105,73 @@ function registerIpcHandlers(): void {
     const id = ensureStringField(payload?.id, "id");
     return authedJson("DELETE", `/playbooks/${encodeURIComponent(id)}`);
   });
+
+  ipcMain.handle("seller-rooms:list", async () => authedJson("GET", "/seller-rooms"));
+  ipcMain.handle("seller-rooms:get", async (_event, payload?: Record<string, unknown>) => {
+    const id = ensureStringField(payload?.id, "id");
+    return authedJson("GET", `/seller-rooms/${encodeURIComponent(id)}`);
+  });
+  ipcMain.handle("seller-rooms:create", async (_event, payload?: Record<string, unknown>) => {
+    return authedJson("POST", "/seller-rooms", payload);
+  });
+  ipcMain.handle("seller-rooms:invite", async (_event, payload?: Record<string, unknown>) => {
+    const id = ensureStringField(payload?.id, "id");
+    const inviteeId = ensureStringField(payload?.inviteeId, "inviteeId");
+    return authedJson("POST", `/seller-rooms/${encodeURIComponent(id)}/invite`, {
+      inviteeId,
+    });
+  });
+  ipcMain.handle("seller-rooms:accept", async (_event, payload?: Record<string, unknown>) => {
+    const invitationId = ensureStringField(payload?.invitationId, "invitationId");
+    return authedJson("POST", "/seller-rooms/invitations/accept", { invitationId });
+  });
+  ipcMain.handle("seller-rooms:join", async (_event, payload?: Record<string, unknown>) => {
+    const id = ensureStringField(payload?.id, "id");
+    return authedJson("POST", `/seller-rooms/${encodeURIComponent(id)}/join`);
+  });
+  ipcMain.handle("seller-rooms:leave", async (_event, payload?: Record<string, unknown>) => {
+    const id = ensureStringField(payload?.id, "id");
+    return authedJson("POST", `/seller-rooms/${encodeURIComponent(id)}/leave`);
+  });
+  ipcMain.handle("seller-rooms:end", async (_event, payload?: Record<string, unknown>) => {
+    const id = ensureStringField(payload?.id, "id");
+    return authedJson("POST", `/seller-rooms/${encodeURIComponent(id)}/end`);
+  });
+
+  ipcMain.handle("acoustic:get-corpus-dir", () => {
+    const dir = path.join(app.getPath("userData"), "acoustic-corpus");
+    fs.mkdirSync(dir, { recursive: true });
+    return dir;
+  });
+
+  ipcMain.handle(
+    "acoustic:save-corpus",
+    async (_event, payload?: Record<string, unknown>) => {
+      const manifest = payload?.manifest;
+      const micWav = payload?.micWav;
+      const loopbackWav = payload?.loopbackWav;
+      if (!manifest || typeof manifest !== "object") {
+        throw new Error("manifest is required");
+      }
+      const sessionId = ensureStringField(
+        (manifest as Record<string, unknown>).session_id,
+        "session_id",
+      );
+      const micBytes = toUint8Array(micWav, "micWav");
+      const loopbackBytes = toUint8Array(loopbackWav, "loopbackWav");
+      const baseDir = path.join(app.getPath("userData"), "acoustic-corpus");
+      const sessionDir = path.join(baseDir, sessionId);
+      fs.mkdirSync(sessionDir, { recursive: true });
+      fs.writeFileSync(path.join(sessionDir, "mic.wav"), micBytes);
+      fs.writeFileSync(path.join(sessionDir, "loopback.wav"), loopbackBytes);
+      fs.writeFileSync(
+        path.join(sessionDir, "manifest.json"),
+        JSON.stringify(manifest, null, 2),
+        "utf8",
+      );
+      return { sessionDir, sessionId };
+    },
+  );
 }
 
 /**
@@ -1140,9 +1239,9 @@ app.whenReady().then(async () => {
   });
   session.defaultSession.setPermissionCheckHandler((_wc, permission) => permission === "media");
 
-  // Renderer CSP. Tight default; connect-src allows backend HTTP/WS and Socket.IO.
-  // We rebuild the connect-src list from the loaded desktop config so env overrides
-  // propagate without editing this string.
+  // Renderer CSP. Tight default; connect-src allows the configured backend and,
+  // when direct mode is enabled, the Python HTTP/WS origin used for audio and
+  // feedback. Origins come only from main-process config/env.
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
     const connectSrc = Array.from(allowedConnectOrigins).join(" ");
     const csp = [

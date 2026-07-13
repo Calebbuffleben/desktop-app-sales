@@ -54,7 +54,7 @@ export type FeedbackConnectionState = {
   lastLatencyMs?: number;
 };
 
-function normalizeFeedbackPayload(event: Record<string, unknown>): FeedbackPayload {
+export function normalizeFeedbackPayload(event: Record<string, unknown>): FeedbackPayload {
   const metadata =
     event.metadata && typeof event.metadata === "object"
       ? (event.metadata as FeedbackMetadata)

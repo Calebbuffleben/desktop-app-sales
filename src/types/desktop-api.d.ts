@@ -100,6 +100,9 @@ type DesktopApi = {
     meetingId?: string;
     feedbackHttpBase?: string;
   }) => Promise<{ ok: true; meetingId: string; feedbackHttpBase: string }>;
+  publishDirectFeedback: (
+    payload: Record<string, unknown>,
+  ) => Promise<{ ok: true }>;
   protocolPreview: (payload: {
     meetUrl?: string;
     meetingId?: string;
@@ -125,6 +128,9 @@ type DesktopApi = {
   }>;
   onFeedbackContextUpdated: (
     handler: (payload: { meetingId: string; feedbackHttpBase: string }) => void,
+  ) => () => void;
+  onDirectFeedback: (
+    handler: (payload: Record<string, unknown>) => void,
   ) => () => void;
   onAnchorModeUpdated: (
     handler: (payload: { anchorMode: "fixed" | "meet-window" }) => void,
@@ -216,6 +222,47 @@ type DesktopApi = {
     payload: { id: string } & UpdatePlaybookTemplatePayload,
   ) => Promise<PlaybookTemplateSummary>;
   playbooksRemove: (payload: { id: string }) => Promise<{ deleted: true } | unknown>;
+  getAcousticCorpusDir: () => Promise<string>;
+  saveAcousticCorpus: (payload: {
+    manifest: Record<string, unknown>;
+    micWav: Uint8Array | number[];
+    loopbackWav: Uint8Array | number[];
+  }) => Promise<{ sessionDir: string; sessionId: string }>;
+  sellerRoomsList: () => Promise<SellerRoomSummary[]>;
+  sellerRoomsGet: (payload: { id: string }) => Promise<SellerRoomSummary>;
+  sellerRoomsCreate: (payload: {
+    name: string;
+    meetingId: string;
+    meetUrl?: string;
+  }) => Promise<SellerRoomSummary>;
+  sellerRoomsInvite: (payload: {
+    id: string;
+    inviteeId: string;
+  }) => Promise<unknown>;
+  sellerRoomsAccept: (payload: { invitationId: string }) => Promise<SellerRoomSummary>;
+  sellerRoomsJoin: (payload: { id: string }) => Promise<SellerRoomSummary>;
+  sellerRoomsLeave: (payload: { id: string }) => Promise<{ ok: true }>;
+  sellerRoomsEnd: (payload: { id: string }) => Promise<SellerRoomSummary>;
+};
+
+export type SellerRoomSummary = {
+  id: string;
+  tenantId: string;
+  meetingId: string;
+  name: string;
+  status: "OPEN" | "ACTIVE" | "ENDED" | "ARCHIVED";
+  meetUrl?: string | null;
+  members?: Array<{
+    userId: string;
+    status: string;
+    user?: { id: string; email: string; name: string | null };
+  }>;
+  invitations?: Array<{
+    id: string;
+    inviteeId: string;
+    status: string;
+    invitee?: { id: string; email: string; name: string | null };
+  }>;
 };
 
 export type MembershipRoleValue = "OWNER" | "ADMIN" | "MEMBER";
