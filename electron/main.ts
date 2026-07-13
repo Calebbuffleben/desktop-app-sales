@@ -1116,9 +1116,9 @@ function registerIpcHandlers(): void {
   });
   ipcMain.handle("seller-rooms:invite", async (_event, payload?: Record<string, unknown>) => {
     const id = ensureStringField(payload?.id, "id");
-    const inviteeId = ensureStringField(payload?.inviteeId, "inviteeId");
+    const email = ensureStringField(payload?.email, "email").trim().toLowerCase();
     return authedJson("POST", `/seller-rooms/${encodeURIComponent(id)}/invite`, {
-      inviteeId,
+      email,
     });
   });
   ipcMain.handle("seller-rooms:accept", async (_event, payload?: Record<string, unknown>) => {

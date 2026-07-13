@@ -243,7 +243,7 @@ function HomeAuthenticated() {
   const [sellerRooms, setSellerRooms] = useState<SellerRoomSummary[]>([]);
   const [activeSellerRoomId, setActiveSellerRoomId] = useState("");
   const [sellerRoomName, setSellerRoomName] = useState("Sala de vendedores");
-  const [inviteeUserId, setInviteeUserId] = useState("");
+  const [inviteeEmail, setInviteeEmail] = useState("");
   const [sellerRoomStatus, setSellerRoomStatus] = useState("");
   const [acousticClass, setAcousticClass] = useState<AcousticClass>("unknown");
   const [correlationConfidence, setCorrelationConfidence] = useState(0);
@@ -719,12 +719,15 @@ function HomeAuthenticated() {
 
   async function handleInviteSellerRoom(): Promise<void> {
     if (!window.desktopApi?.sellerRoomsInvite || !activeSellerRoomId) return;
+    const email = inviteeEmail.trim().toLowerCase();
+    if (!email) return;
     try {
       await window.desktopApi.sellerRoomsInvite({
         id: activeSellerRoomId,
-        inviteeId: inviteeUserId.trim(),
+        email,
       });
-      setSellerRoomStatus(`Invite sent to ${inviteeUserId.trim()}`);
+      setSellerRoomStatus(`Invite sent to ${email}`);
+      setInviteeEmail("");
       await refreshSellerRooms();
     } catch (error) {
       reportError("seller-rooms-invite", error);
@@ -1300,14 +1303,16 @@ function HomeAuthenticated() {
               <div className="mb-2 flex flex-wrap items-center gap-2">
                 <input
                   className="min-w-[160px] flex-1 rounded border border-zinc-700 bg-zinc-900 px-2 py-1 font-mono text-[11px] text-zinc-200"
-                  value={inviteeUserId}
-                  onChange={(e) => setInviteeUserId(e.target.value)}
-                  placeholder="invitee userId (UUID)"
+                  type="email"
+                  autoComplete="email"
+                  value={inviteeEmail}
+                  onChange={(e) => setInviteeEmail(e.target.value)}
+                  placeholder="e-mail do vendedor"
                 />
                 <button
                   className={btn}
                   type="button"
-                  disabled={!activeSellerRoomId || !inviteeUserId.trim()}
+                  disabled={!activeSellerRoomId || !inviteeEmail.trim()}
                   onClick={handleInviteSellerRoom}
                 >
                   Invite

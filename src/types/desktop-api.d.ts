@@ -237,7 +237,7 @@ type DesktopApi = {
   }) => Promise<SellerRoomSummary>;
   sellerRoomsInvite: (payload: {
     id: string;
-    inviteeId: string;
+    email: string;
   }) => Promise<unknown>;
   sellerRoomsAccept: (payload: { invitationId: string }) => Promise<SellerRoomSummary>;
   sellerRoomsJoin: (payload: { id: string }) => Promise<SellerRoomSummary>;
