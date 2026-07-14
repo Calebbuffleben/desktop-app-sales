@@ -252,6 +252,14 @@ export type SellerRoomSummary = {
   name: string;
   status: "OPEN" | "ACTIVE" | "ENDED" | "ARCHIVED";
   meetUrl?: string | null;
+  createdById?: string;
+  createdBy?: { id: string; email: string; name: string | null };
+  myMemberStatus?: "INVITED" | "JOINED" | "LEFT" | null;
+  isCreator?: boolean;
+  onlineUserIds?: string[];
+  onlineCount?: number;
+  iAmOnline?: boolean;
+  pendingInvitationId?: string | null;
   members?: Array<{
     userId: string;
     status: string;
@@ -262,6 +270,7 @@ export type SellerRoomSummary = {
     inviteeId: string;
     status: string;
     invitee?: { id: string; email: string; name: string | null };
+    invitedBy?: { id: string; email: string; name: string | null };
   }>;
 };
 

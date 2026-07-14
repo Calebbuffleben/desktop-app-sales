@@ -20,6 +20,10 @@ export type SellerAudioFingerprintSyncOptions = {
     presence: string[];
     serverTimeMs: number;
   }) => void;
+  onPresenceUpdated?: (payload: {
+    onlineUserIds: string[];
+    onlineCount: number;
+  }) => void;
   onRoomEnded?: (reason: string) => void;
 };
 
@@ -89,6 +93,13 @@ export class SellerAudioFingerprintSync {
         (payload.fingerprint ?? {}) as Record<string, unknown>,
       );
       if (fp) this.buffer.add(fp);
+    });
+    this.socket.on("presence-updated", (payload: Record<string, unknown>) => {
+      const onlineUserIds = (payload.onlineUserIds as string[]) ?? [];
+      this.opts.onPresenceUpdated?.({
+        onlineUserIds,
+        onlineCount: Number(payload.onlineCount ?? onlineUserIds.length),
+      });
     });
     this.socket.on("seller-room-ended", (payload: Record<string, unknown>) => {
       this.joined = false;

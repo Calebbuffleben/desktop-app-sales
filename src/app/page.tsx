@@ -27,6 +27,7 @@ import { encodePcm16MonoWav } from "@/shared/wav-writer";
 import { FingerprintGenerator } from "@/shared/fingerprint-generator";
 import { FingerprintCorrelator } from "@/shared/fingerprint-correlator";
 import { SellerAudioFingerprintSync } from "@/shared/seller-audio-fingerprint-sync";
+import { SellerRoomsPanel } from "@/shared/seller-rooms-panel";
 import type { AcousticClass } from "@/shared/fingerprint-types";
 import type { SellerRoomSummary } from "@/types/desktop-api";
 import { SessionGate } from "@/shared/session-gate";
@@ -247,6 +248,8 @@ function HomeAuthenticated() {
   const [sellerRoomStatus, setSellerRoomStatus] = useState("");
   const [acousticClass, setAcousticClass] = useState<AcousticClass>("unknown");
   const [correlationConfidence, setCorrelationConfidence] = useState(0);
+  const [syncJoined, setSyncJoined] = useState(false);
+  const [syncPresenceIds, setSyncPresenceIds] = useState<string[]>([]);
   const fingerprintSyncRef = useRef<SellerAudioFingerprintSync | null>(null);
   const fingerprintGeneratorRef = useRef(new FingerprintGenerator());
   const fingerprintCorrelatorRef = useRef(new FingerprintCorrelator());
@@ -261,6 +264,10 @@ function HomeAuthenticated() {
   useEffect(() => {
     if (!bridgeReady || !window.desktopApi?.sellerRoomsList) return;
     void refreshSellerRooms();
+    const timer = window.setInterval(() => {
+      void refreshSellerRooms();
+    }, 10_000);
+    return () => window.clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bridgeReady]);
 
@@ -624,14 +631,24 @@ function HomeAuthenticated() {
           tenantId: session.tenant.id,
           onError: (message) => appendLog(`seller-room: ${message}`),
           onJoined: (payload) => {
+            setSyncJoined(true);
+            setSyncPresenceIds(payload.presence);
             setSellerRoomStatus(
               `Joined | members=${payload.members.length} | presence=${payload.presence.length}`,
             );
             appendLog("seller-room: fingerprint sync joined");
+            void refreshSellerRooms();
+          },
+          onPresenceUpdated: (payload) => {
+            setSyncPresenceIds(payload.onlineUserIds);
+            void refreshSellerRooms();
           },
           onRoomEnded: (reason) => {
+            setSyncJoined(false);
+            setSyncPresenceIds([]);
             setSellerRoomStatus(`Room ended: ${reason}`);
             setAcousticClass("unknown");
+            void refreshSellerRooms();
           },
         });
         fingerprintSyncRef.current = sync;
@@ -666,6 +683,8 @@ function HomeAuthenticated() {
       wireAcousticPipeline(false, "", "");
       await fingerprintSyncRef.current?.disconnect();
       fingerprintSyncRef.current = null;
+      setSyncJoined(false);
+      setSyncPresenceIds([]);
       setAcousticClass("unknown");
       setCorrelationConfidence(0);
       await stopAllCaptureServices();
@@ -705,6 +724,16 @@ function HomeAuthenticated() {
     }
   }
 
+  async function handleSelectSellerRoom(roomId: string): Promise<void> {
+    setActiveSellerRoomId(roomId);
+    const room = sellerRooms.find((r) => r.id === roomId);
+    setSellerRoomStatus(
+      room
+        ? `Selecionada: ${room.name} (${room.onlineCount ?? 0} online)`
+        : `Selecionada: ${roomId}`,
+    );
+  }
+
   async function handleJoinSellerRoom(roomId: string): Promise<void> {
     if (!window.desktopApi?.sellerRoomsJoin) return;
     try {
@@ -714,6 +743,38 @@ function HomeAuthenticated() {
       await refreshSellerRooms();
     } catch (error) {
       reportError("seller-rooms-join", error);
+    }
+  }
+
+  async function handleLeaveSellerRoom(roomId: string): Promise<void> {
+    if (!window.desktopApi?.sellerRoomsLeave) return;
+    try {
+      await window.desktopApi.sellerRoomsLeave({ id: roomId });
+      if (activeSellerRoomId === roomId) {
+        setActiveSellerRoomId("");
+        setSyncJoined(false);
+        setSyncPresenceIds([]);
+        await fingerprintSyncRef.current?.disconnect();
+        fingerprintSyncRef.current = null;
+      }
+      setSellerRoomStatus("Saiu da sala");
+      await refreshSellerRooms();
+    } catch (error) {
+      reportError("seller-rooms-leave", error);
+    }
+  }
+
+  async function handleAcceptSellerRoomInvite(
+    invitationId: string,
+  ): Promise<void> {
+    if (!window.desktopApi?.sellerRoomsAccept) return;
+    try {
+      const room = await window.desktopApi.sellerRoomsAccept({ invitationId });
+      setActiveSellerRoomId(room.id);
+      setSellerRoomStatus(`Convite aceito: ${room.name}`);
+      await refreshSellerRooms();
+    } catch (error) {
+      reportError("seller-rooms-accept", error);
     }
   }
 
@@ -734,12 +795,19 @@ function HomeAuthenticated() {
     }
   }
 
-  async function handleEndSellerRoom(): Promise<void> {
-    if (!window.desktopApi?.sellerRoomsEnd || !activeSellerRoomId) return;
+  async function handleEndSellerRoom(roomId?: string): Promise<void> {
+    const id = roomId || activeSellerRoomId;
+    if (!window.desktopApi?.sellerRoomsEnd || !id) return;
     try {
-      await window.desktopApi.sellerRoomsEnd({ id: activeSellerRoomId });
+      await window.desktopApi.sellerRoomsEnd({ id });
+      if (activeSellerRoomId === id) {
+        setActiveSellerRoomId("");
+        setSyncJoined(false);
+        setSyncPresenceIds([]);
+        await fingerprintSyncRef.current?.disconnect();
+        fingerprintSyncRef.current = null;
+      }
       setSellerRoomStatus("Room ended");
-      setActiveSellerRoomId("");
       await refreshSellerRooms();
     } catch (error) {
       reportError("seller-rooms-end", error);
@@ -1252,89 +1320,31 @@ function HomeAuthenticated() {
                 Overlay click-through: {clickThrough ? "on" : "off"}
               </button>
             </div>
-            <div className="mt-4 rounded-lg border border-zinc-800 bg-zinc-950/50 p-3">
-              <p className="mb-2 font-mono text-[11px] font-semibold uppercase tracking-wide text-zinc-400">
-                Seller Room (acoustic sync)
-              </p>
-              <div className="mb-2 flex flex-wrap items-center gap-2">
-                <input
-                  className="min-w-[180px] flex-1 rounded border border-zinc-700 bg-zinc-900 px-2 py-1 font-mono text-[11px] text-zinc-200"
-                  value={sellerRoomName}
-                  onChange={(e) => setSellerRoomName(e.target.value)}
-                  placeholder="Nome da sala"
-                />
-                <button
-                  className={btn}
-                  type="button"
-                  disabled={!isBridgeAvailable || !window.desktopApi?.sellerRoomsCreate}
-                  onClick={handleCreateSellerRoom}
-                >
-                  Create room
-                </button>
-                <button
-                  className={btn}
-                  type="button"
-                  disabled={!isBridgeAvailable}
-                  onClick={() => void refreshSellerRooms()}
-                >
-                  Refresh
-                </button>
-              </div>
-              <div className="mb-2 max-h-28 overflow-auto space-y-1">
-                {sellerRooms.length === 0 ? (
-                  <p className="font-mono text-[10px] text-zinc-500">Nenhuma sala</p>
-                ) : (
-                  sellerRooms.map((room) => (
-                    <button
-                      key={room.id}
-                      type="button"
-                      className={`block w-full truncate rounded border px-2 py-1 text-left font-mono text-[11px] ${
-                        activeSellerRoomId === room.id
-                          ? "border-cyan-600 bg-cyan-950/40 text-cyan-200"
-                          : "border-zinc-800 bg-zinc-900 text-zinc-300"
-                      }`}
-                      onClick={() => void handleJoinSellerRoom(room.id)}
-                    >
-                      {room.name} · {room.status} · {room.meetingId}
-                    </button>
-                  ))
-                )}
-              </div>
-              <div className="mb-2 flex flex-wrap items-center gap-2">
-                <input
-                  className="min-w-[160px] flex-1 rounded border border-zinc-700 bg-zinc-900 px-2 py-1 font-mono text-[11px] text-zinc-200"
-                  type="email"
-                  autoComplete="email"
-                  value={inviteeEmail}
-                  onChange={(e) => setInviteeEmail(e.target.value)}
-                  placeholder="e-mail do vendedor"
-                />
-                <button
-                  className={btn}
-                  type="button"
-                  disabled={!activeSellerRoomId || !inviteeEmail.trim()}
-                  onClick={handleInviteSellerRoom}
-                >
-                  Invite
-                </button>
-                <button
-                  className={btnDanger}
-                  type="button"
-                  disabled={!activeSellerRoomId}
-                  onClick={handleEndSellerRoom}
-                >
-                  End room
-                </button>
-              </div>
-              <p className="font-mono text-[11px] text-zinc-300">
-                Active: {activeSellerRoomId || "none"} · loopback class:{" "}
-                <span className="text-cyan-300">{acousticClass}</span> · conf{" "}
-                {correlationConfidence.toFixed(2)}
-              </p>
-              {sellerRoomStatus ? (
-                <p className="mt-1 font-mono text-[10px] text-zinc-500">{sellerRoomStatus}</p>
-              ) : null}
-            </div>
+            <SellerRoomsPanel
+              rooms={sellerRooms}
+              currentUserId={session.user?.id}
+              activeSellerRoomId={activeSellerRoomId}
+              sellerRoomName={sellerRoomName}
+              inviteeEmail={inviteeEmail}
+              sellerRoomStatus={sellerRoomStatus}
+              acousticClass={acousticClass}
+              correlationConfidence={correlationConfidence}
+              syncJoined={syncJoined}
+              syncPresenceIds={syncPresenceIds}
+              disabled={!isBridgeAvailable || !window.desktopApi?.sellerRoomsList}
+              onSellerRoomNameChange={setSellerRoomName}
+              onInviteeEmailChange={setInviteeEmail}
+              onRefresh={() => void refreshSellerRooms()}
+              onCreate={() => void handleCreateSellerRoom()}
+              onSelectRoom={(roomId) => void handleSelectSellerRoom(roomId)}
+              onJoinMembership={(roomId) => void handleJoinSellerRoom(roomId)}
+              onLeave={(roomId) => void handleLeaveSellerRoom(roomId)}
+              onAcceptInvite={(invitationId) =>
+                void handleAcceptSellerRoomInvite(invitationId)
+              }
+              onInvite={() => void handleInviteSellerRoom()}
+              onEnd={(roomId) => void handleEndSellerRoom(roomId)}
+            />
             <div className="mt-4 rounded-lg border border-zinc-800 bg-zinc-950/50 p-3">
               <p className="mb-2 font-mono text-[11px] font-semibold uppercase tracking-wide text-zinc-400">
                 Acoustic corpus (Fase 0)
