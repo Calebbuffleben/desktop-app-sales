@@ -1,6 +1,9 @@
 {
   "BACKEND_WS_BASE": "wss://backend-analysis-production-a688.up.railway.app",
   "EGRESS_AUDIO_PATH": "/egress-audio",
+  "PYTHON_DIRECT_ENABLED": true,
+  "PYTHON_WS_BASE": "wss://text-analysis-production.up.railway.app",
+  "PYTHON_WS_PATH": "/ws",
   "DEFAULT_SAMPLE_RATE": 16000,
   "DEFAULT_CHANNELS": 1,
   "ALLOW_SCRIPT_PROCESSOR_FALLBACK": true,

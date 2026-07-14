@@ -3,6 +3,12 @@ import {
   type ParticipantRole,
 } from "./egress-audio-protocol";
 import type { DesktopConfig } from "./desktop-config";
+import {
+  encodeLabelControl,
+  encodePcmV2Frame,
+  type AcousticWindowLabel,
+} from "./pcm-envelope-v2";
+import type { AcousticClass } from "./fingerprint-types";
 
 const FRAME_MS = 20;
 const TARGET_SAMPLE_RATE = 16000;
@@ -31,6 +37,12 @@ export type StartCaptureInput = {
    * every time the service (re)opens a connection so refreshed tokens take
    * effect without restarting capture. */
   getAccessToken: () => Promise<string | null>;
+  /** Optional tap used by the Phase 0 acoustic corpus recorder. */
+  onPcmFrame?: (pcm: Int16Array) => void;
+  /** Seller Room id — disables tab-audio gate and enables PCM v2 on participant. */
+  sellerRoomId?: string;
+  /** Force PCM framing version (default 2 when sellerRoomId is set). */
+  pcmVersion?: 1 | 2;
 };
 
 export type CaptureStatus = "idle" | "starting" | "capturing";
@@ -202,6 +214,7 @@ export class DesktopAudioCaptureService {
   private readonly onLog?: (message: string) => void;
   private readonly onState?: (state: AudioWsState) => void;
   private readonly onMeter?: (meter: AudioMeter) => void;
+  private readonly onFeedback?: (payload: Record<string, unknown>) => void;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempt = 0;
   private wsUrl = "";
@@ -217,8 +230,16 @@ export class DesktopAudioCaptureService {
     sampleRate: number;
     channels: number;
     tenantId: string;
+    sellerRoomId?: string;
+    pcmVersion?: 1 | 2;
   } | null = null;
   private getAccessToken: (() => Promise<string | null>) | null = null;
+  private onPcmFrame: ((pcm: Int16Array) => void) | null = null;
+  private pcmVersion: 1 | 2 = 1;
+  private frameSeq = 0;
+  private captureMonoMs = 0;
+  private currentLabel: AcousticWindowLabel | null = null;
+  private lastSentLabelId = -1;
   private connectingPromise: Promise<void> | null = null;
   private wsState: AudioWsState = {
     status: "idle",
@@ -234,19 +255,42 @@ export class DesktopAudioCaptureService {
   };
   private tabAudioGateEnabled = false;
   private tabAudioGateDbfs = -45;
+  private lifecycleVersion = 0;
 
   constructor(
     onLog?: (message: string) => void,
     onState?: (state: AudioWsState) => void,
     onMeter?: (meter: AudioMeter) => void,
+    onFeedback?: (payload: Record<string, unknown>) => void,
   ) {
     this.onLog = onLog;
     this.onState = onState;
     this.onMeter = onMeter;
+    this.onFeedback = onFeedback;
   }
 
   getStatus(): CaptureStatus {
     return this.status;
+  }
+
+  setOnPcmFrame(callback: ((pcm: Int16Array) => void) | null): void {
+    this.onPcmFrame = callback;
+  }
+
+  /** Update the acoustic label applied to subsequent PCM v2 frames. */
+  setAcousticLabel(label: Omit<AcousticWindowLabel, "labelId"> & { labelId?: number }): void {
+    const labelId = label.labelId ?? (this.currentLabel?.labelId ?? 0) + 1;
+    this.currentLabel = { ...label, labelId };
+  }
+
+  getAcousticClass(): AcousticClass {
+    return this.currentLabel?.acousticClass ?? "unknown";
+  }
+
+  private assertActiveLifecycle(version: number): void {
+    if (this.lifecycleVersion !== version || this.status !== "starting") {
+      throw new Error("capture aborted during audio initialization");
+    }
   }
 
   private log(message: string): void {
@@ -333,6 +377,27 @@ export class DesktopAudioCaptureService {
       ws.onerror = () => {
         if (this.debug) {
           this.log("WS error event (awaiting close for details)");
+        }
+      };
+
+      ws.onmessage = (event: MessageEvent) => {
+        if (typeof event.data !== "string") return;
+        try {
+          const envelope = JSON.parse(event.data) as {
+            type?: unknown;
+            payload?: unknown;
+          };
+          if (
+            envelope.type === "feedback" &&
+            envelope.payload &&
+            typeof envelope.payload === "object"
+          ) {
+            this.onFeedback?.(
+              envelope.payload as Record<string, unknown>,
+            );
+          }
+        } catch {
+          if (this.debug) this.log("WS text frame ignored: invalid JSON");
         }
       };
 
@@ -555,6 +620,32 @@ export class DesktopAudioCaptureService {
         outbound = new Int16Array(pcm.length);
       }
     }
+
+    this.onPcmFrame?.(outbound);
+
+    if (this.pcmVersion === 2) {
+      const labelId = this.currentLabel?.labelId ?? 0;
+      if (this.currentLabel && this.lastSentLabelId !== labelId) {
+        this.ws.send(encodeLabelControl(this.currentLabel));
+        this.lastSentLabelId = labelId;
+      }
+      const framed = encodePcmV2Frame({
+        frameSeq: this.frameSeq,
+        captureMonoMs: this.captureMonoMs,
+        labelId,
+        pcm: outbound,
+      });
+      this.ws.send(framed);
+      this.frameSeq += 1;
+      this.captureMonoMs += FRAME_MS;
+      this.emitMeter({
+        bytesSent: this.meter.bytesSent + framed.byteLength,
+        framesSent: this.meter.framesSent + 1,
+        lastFrameTs: Date.now(),
+      });
+      return;
+    }
+
     this.ws.send(outbound.buffer);
     this.emitMeter({
       bytesSent: this.meter.bytesSent + outbound.byteLength,
@@ -567,8 +658,9 @@ export class DesktopAudioCaptureService {
     input: StartCaptureInput,
   ): Promise<{ wsUrl: string; resolvedSource: ResolvedSource; platform: CapturePlatform }> {
     if (this.status !== "idle") {
-      await this.stop();
+      throw new Error(`audio capture is already ${this.status}`);
     }
+    const lifecycleVersion = ++this.lifecycleVersion;
 
     const targetSampleRate = input.config.DEFAULT_SAMPLE_RATE || TARGET_SAMPLE_RATE;
     const channels = input.config.DEFAULT_CHANNELS || 1;
@@ -581,9 +673,20 @@ export class DesktopAudioCaptureService {
     }
 
     this.debug = Boolean(input.debug);
+    const directToPython =
+      input.config.PYTHON_DIRECT_ENABLED && Boolean(input.config.PYTHON_WS_BASE);
+    if (directToPython) {
+      this.log(
+        `Bypass ativo: áudio direto ao python-service (${input.config.PYTHON_WS_BASE})`,
+      );
+    }
     this.baseWsParams = {
-      baseWs: input.config.BACKEND_WS_BASE,
-      egressPath: input.config.EGRESS_AUDIO_PATH,
+      baseWs: directToPython
+        ? input.config.PYTHON_WS_BASE
+        : input.config.BACKEND_WS_BASE,
+      egressPath: directToPython
+        ? input.config.PYTHON_WS_PATH || "/ws"
+        : input.config.EGRESS_AUDIO_PATH,
       meetUrl: input.meetUrl,
       meetingId: input.meetingId,
       participant: input.participant || "desktop",
@@ -592,10 +695,22 @@ export class DesktopAudioCaptureService {
       sampleRate: targetSampleRate,
       channels,
       tenantId: input.tenantId,
+      sellerRoomId: input.sellerRoomId,
+      pcmVersion:
+        input.pcmVersion ?? (input.sellerRoomId ? 2 : 1),
     };
-    this.tabAudioGateEnabled = Boolean(input.config.TAB_AUDIO_GATE_ENABLED);
+    this.pcmVersion = this.baseWsParams.pcmVersion ?? 1;
+    this.frameSeq = 0;
+    this.captureMonoMs = 0;
+    this.currentLabel = null;
+    this.lastSentLabelId = -1;
+    // Seller Room mode must never silence loopback — correlation needs real PCM.
+    this.tabAudioGateEnabled = input.sellerRoomId
+      ? false
+      : Boolean(input.config.TAB_AUDIO_GATE_ENABLED);
     this.tabAudioGateDbfs = input.config.TAB_AUDIO_GATE_DBFS;
     this.getAccessToken = input.getAccessToken;
+    this.onPcmFrame = input.onPcmFrame ?? null;
     this.wsUrl = "";
     this.status = "starting";
     this.reconnectAttempt = 0;
@@ -614,12 +729,15 @@ export class DesktopAudioCaptureService {
 
     try {
       await this.connectWebSocketWithRetry();
+      this.assertActiveLifecycle(lifecycleVersion);
     } catch (err) {
-      this.status = "idle";
-      this.setWsState({
-        status: "error",
-        lastError: err instanceof Error ? err.message : String(err),
-      });
+      if (this.lifecycleVersion === lifecycleVersion) {
+        this.status = "idle";
+        this.setWsState({
+          status: "error",
+          lastError: err instanceof Error ? err.message : String(err),
+        });
+      }
       throw err;
     }
 
@@ -632,8 +750,22 @@ export class DesktopAudioCaptureService {
 
       if (wantsMic) {
         try {
-          this.micStream = await this.openMicrophone();
+          const micStream = await this.openMicrophone();
+          if (
+            this.lifecycleVersion !== lifecycleVersion ||
+            this.status !== "starting"
+          ) {
+            micStream.getTracks().forEach((track) => track.stop());
+          }
+          this.assertActiveLifecycle(lifecycleVersion);
+          this.micStream = micStream;
         } catch (err) {
+          if (
+            this.lifecycleVersion !== lifecycleVersion ||
+            this.status !== "starting"
+          ) {
+            throw err;
+          }
           if (input.sourceMode === "microphone") throw err;
           this.log(
             `Microfone indisponivel: ${err instanceof Error ? err.message : String(err)}`,
@@ -643,8 +775,24 @@ export class DesktopAudioCaptureService {
 
       if (wantsLoopback) {
         try {
-          this.loopbackStream = await this.openSystemAudio();
+          const loopbackStream = await this.openSystemAudio();
+          if (
+            this.lifecycleVersion !== lifecycleVersion ||
+            this.status !== "starting"
+          ) {
+            loopbackStream.getTracks().forEach((track) => track.stop());
+            this.systemVideoTracks.forEach((track) => track.stop());
+            this.systemVideoTracks = [];
+          }
+          this.assertActiveLifecycle(lifecycleVersion);
+          this.loopbackStream = loopbackStream;
         } catch (err) {
+          if (
+            this.lifecycleVersion !== lifecycleVersion ||
+            this.status !== "starting"
+          ) {
+            throw err;
+          }
           if (input.sourceMode === "system") throw err;
           this.log(
             `Loopback indisponivel: ${err instanceof Error ? err.message : String(err)}`,
@@ -665,6 +813,7 @@ export class DesktopAudioCaptureService {
       const ctx = new AudioContext({ sampleRate: targetSampleRate });
       this.audioContext = ctx;
       await ctx.resume();
+      this.assertActiveLifecycle(lifecycleVersion);
 
       this.frameSamples = Math.max(
         1,
@@ -698,9 +847,10 @@ export class DesktopAudioCaptureService {
         this.loopbackGainNode.connect(this.mixerDestination);
       }
 
-      this.mixedSourceNode = ctx.createMediaStreamSource(
+      const mixedSourceNode = ctx.createMediaStreamSource(
         this.mixerDestination.stream,
       );
+      this.mixedSourceNode = mixedSourceNode;
 
       const allowWorklet =
         input.config.ALLOW_AUDIOWORKLET_FALLBACK !== false;
@@ -711,13 +861,15 @@ export class DesktopAudioCaptureService {
       if (allowWorklet && typeof ctx.audioWorklet !== "undefined") {
         try {
           await this.ensureWorkletModule(ctx);
-          this.workletNode = new AudioWorkletNode(ctx, "pcm16-framer", {
+          this.assertActiveLifecycle(lifecycleVersion);
+          const workletNode = new AudioWorkletNode(ctx, "pcm16-framer", {
             numberOfInputs: 1,
             numberOfOutputs: 1,
             outputChannelCount: [1],
             processorOptions: { frameSamples: this.frameSamples },
           });
-          this.workletNode.port.onmessage = (evt: MessageEvent) => {
+          this.workletNode = workletNode;
+          workletNode.port.onmessage = (evt: MessageEvent) => {
             const payload = evt.data as
               | { type: "frame"; pcm: ArrayBuffer }
               | { type: "meter"; rms: number }
@@ -729,11 +881,12 @@ export class DesktopAudioCaptureService {
               this.mixedRmsOverride = payload.rms;
             }
           };
-          this.mixedSourceNode.connect(this.workletNode);
-          this.silentSink = ctx.createGain();
-          this.silentSink.gain.value = 0;
-          this.workletNode.connect(this.silentSink);
-          this.silentSink.connect(ctx.destination);
+          mixedSourceNode.connect(workletNode);
+          const silentSink = ctx.createGain();
+          this.silentSink = silentSink;
+          silentSink.gain.value = 0;
+          workletNode.connect(silentSink);
+          silentSink.connect(ctx.destination);
           framerAttached = true;
           this.log("PCM16 framer: AudioWorkletNode ativo");
         } catch (err) {
@@ -770,11 +923,13 @@ export class DesktopAudioCaptureService {
           }
           if (offset > 0) this.queue = this.queue.slice(offset);
         };
-        this.mixedSourceNode.connect(processor);
-        this.silentSink = ctx.createGain();
-        this.silentSink.gain.value = 0;
-        processor.connect(this.silentSink);
-        this.silentSink.connect(ctx.destination);
+        this.assertActiveLifecycle(lifecycleVersion);
+        mixedSourceNode.connect(processor);
+        const silentSink = ctx.createGain();
+        this.silentSink = silentSink;
+        silentSink.gain.value = 0;
+        processor.connect(silentSink);
+        silentSink.connect(ctx.destination);
         this.log(
           "PCM16 framer: ScriptProcessorNode (fallback) ativo - AudioWorklet indisponivel",
         );
@@ -788,8 +943,10 @@ export class DesktopAudioCaptureService {
       );
       return { wsUrl: this.wsUrl, resolvedSource, platform };
     } catch (err) {
-      await this.teardown();
-      this.status = "idle";
+      if (this.lifecycleVersion === lifecycleVersion) {
+        await this.teardown();
+        this.status = "idle";
+      }
       throw err;
     }
   }
@@ -899,6 +1056,7 @@ export class DesktopAudioCaptureService {
     this.wsUrl = "";
     this.baseWsParams = null;
     this.getAccessToken = null;
+    this.onPcmFrame = null;
     this.setWsState({
       status: "idle",
       reconnectAttempt: 0,
@@ -909,6 +1067,7 @@ export class DesktopAudioCaptureService {
   }
 
   async stop(): Promise<void> {
+    this.lifecycleVersion += 1;
     this.status = "idle";
     await this.teardown();
     this.log("Audio capture stopped");

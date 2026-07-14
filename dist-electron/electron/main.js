@@ -50,7 +50,7 @@ function syncFeedbackHttpBaseFromAuth(httpBase) {
     if (!httpBase)
         return;
     appState.feedbackHttpBase = httpBase;
-    registerBackendConnectOrigins(httpBase);
+    registerConnectOrigins(httpBase);
     broadcastFeedbackContext();
 }
 authService.on("session-updated", (snapshot) => {
@@ -91,7 +91,7 @@ const allowedConnectOrigins = new Set([
     "ws://localhost:3001",
     "http://127.0.0.1:39201",
 ]);
-function registerBackendConnectOrigins(httpBase) {
+function registerConnectOrigins(httpBase) {
     try {
         const httpUrl = new URL(httpBase);
         allowedConnectOrigins.add(httpUrl.origin);
@@ -103,7 +103,10 @@ function registerBackendConnectOrigins(httpBase) {
     }
 }
 try {
-    registerBackendConnectOrigins(wsToHttpBase(initialConfig.BACKEND_WS_BASE));
+    registerConnectOrigins(wsToHttpBase(initialConfig.BACKEND_WS_BASE));
+    if (initialConfig.PYTHON_DIRECT_ENABLED && initialConfig.PYTHON_WS_BASE) {
+        registerConnectOrigins(wsToHttpBase(initialConfig.PYTHON_WS_BASE));
+    }
 }
 catch {
     /* ignore */
@@ -375,6 +378,16 @@ function registerIpcHandlers() {
             selectedSourceId: appState.selectedSourceId,
             update: appState.update,
         };
+    });
+    ipcMain.handle("desktop:publish-direct-feedback", (_event, payload) => {
+        if (!payload || typeof payload !== "object") {
+            throw new Error("direct feedback payload must be an object");
+        }
+        if (overlayWindow && !overlayWindow.isDestroyed()) {
+            overlayWindow.webContents.send("desktop:direct-feedback", payload);
+        }
+        addLog(`Direct feedback forwarded | meetingId=${String(payload.meetingId || "n/a")} | id=${String(payload.id || "n/a")}`);
+        return { ok: true };
     });
     ipcMain.handle("desktop:check-capture-readiness", async () => {
         const platform = process.platform;
@@ -978,9 +991,9 @@ app.whenReady().then(async () => {
         callback(permission === "media");
     });
     session.defaultSession.setPermissionCheckHandler((_wc, permission) => permission === "media");
-    // Renderer CSP. Tight default; connect-src allows backend HTTP/WS and Socket.IO.
-    // We rebuild the connect-src list from the loaded desktop config so env overrides
-    // propagate without editing this string.
+    // Renderer CSP. Tight default; connect-src allows the configured backend and,
+    // when direct mode is enabled, the Python HTTP/WS origin used for audio and
+    // feedback. Origins come only from main-process config/env.
     session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
         const connectSrc = Array.from(allowedConnectOrigins).join(" ");
         const csp = [

@@ -4,6 +4,11 @@ import path from "node:path";
 export type DesktopConfig = {
   BACKEND_WS_BASE: string;
   EGRESS_AUDIO_PATH: string;
+  /** Bypass do backend: áudio e feedback direto com o python-service. */
+  PYTHON_DIRECT_ENABLED: boolean;
+  /** Base WS do python-service (ex: ws://localhost:8000 ou wss://python.up.railway.app). */
+  PYTHON_WS_BASE: string;
+  PYTHON_WS_PATH: string;
   DEFAULT_SAMPLE_RATE: number;
   DEFAULT_CHANNELS: number;
   ALLOW_SCRIPT_PROCESSOR_FALLBACK: boolean;
@@ -15,6 +20,9 @@ export type DesktopConfig = {
 const DEFAULT_CONFIG: DesktopConfig = {
   BACKEND_WS_BASE: "ws://localhost:3001",
   EGRESS_AUDIO_PATH: "/egress-audio",
+  PYTHON_DIRECT_ENABLED: false,
+  PYTHON_WS_BASE: "ws://localhost:8000",
+  PYTHON_WS_PATH: "/ws",
   DEFAULT_SAMPLE_RATE: 16000,
   DEFAULT_CHANNELS: 1,
   ALLOW_SCRIPT_PROCESSOR_FALLBACK: true,
@@ -76,6 +84,18 @@ export function loadDesktopConfig(options: LoadOptions = {}): DesktopConfig {
       process.env.EGRESS_AUDIO_PATH ??
       fromFile.EGRESS_AUDIO_PATH ??
       DEFAULT_CONFIG.EGRESS_AUDIO_PATH,
+    PYTHON_DIRECT_ENABLED: parseBool(
+      process.env.PYTHON_DIRECT_ENABLED,
+      fromFile.PYTHON_DIRECT_ENABLED ?? DEFAULT_CONFIG.PYTHON_DIRECT_ENABLED,
+    ),
+    PYTHON_WS_BASE:
+      process.env.PYTHON_WS_BASE ??
+      fromFile.PYTHON_WS_BASE ??
+      DEFAULT_CONFIG.PYTHON_WS_BASE,
+    PYTHON_WS_PATH:
+      process.env.PYTHON_WS_PATH ??
+      fromFile.PYTHON_WS_PATH ??
+      DEFAULT_CONFIG.PYTHON_WS_PATH,
     DEFAULT_SAMPLE_RATE: parseNumber(
       process.env.DEFAULT_SAMPLE_RATE,
       fromFile.DEFAULT_SAMPLE_RATE ?? DEFAULT_CONFIG.DEFAULT_SAMPLE_RATE,

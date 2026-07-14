@@ -30,12 +30,13 @@ function ttlForSeverity(severity: CoachSeverity): number {
   return OVERLAY_TTL_MS[severity];
 }
 
-type ItemTimers = { exit: ReturnType<typeof setTimeout>; remove: ReturnType<typeof setTimeout> };
+type ItemTimers = { exit: number; remove: number };
 
 export function useOverlayFeedbackQueue() {
   const [items, setItems] = useState<OverlayItem[]>([]);
   const [now, setNow] = useState(() => Date.now());
   const timersRef = useRef<Map<string, ItemTimers>>(new Map());
+  const seenIdsRef = useRef<Set<string>>(new Set());
 
   const clearItemTimers = useCallback((id: string) => {
     const timers = timersRef.current.get(id);
@@ -88,6 +89,14 @@ export function useOverlayFeedbackQueue() {
     (payload: FeedbackPayload) => {
       const id =
         payload.id || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      if (payload.id) {
+        if (seenIdsRef.current.has(id)) return;
+        seenIdsRef.current.add(id);
+        if (seenIdsRef.current.size > 512) {
+          const oldest = seenIdsRef.current.values().next().value;
+          if (oldest) seenIdsRef.current.delete(oldest);
+        }
+      }
       const severity = resolveSeverity(payload);
       const ttlMs = ttlForSeverity(severity);
 
@@ -116,6 +125,7 @@ export function useOverlayFeedbackQueue() {
 
   useEffect(() => {
     const timers = timersRef.current;
+    const seenIds = seenIdsRef.current;
     return () => {
       for (const id of timers.keys()) {
         const t = timers.get(id);
@@ -125,6 +135,7 @@ export function useOverlayFeedbackQueue() {
         }
       }
       timers.clear();
+      seenIds.clear();
     };
   }, []);
 

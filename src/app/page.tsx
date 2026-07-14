@@ -5,6 +5,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -21,6 +22,14 @@ import {
   type FeedbackConnectionState,
 } from "@/shared/feedback-client";
 import { httpBaseToWsBase, resolveEffectiveMeetingId } from "@/shared/egress-audio-protocol";
+import { AcousticCorpusRecorder, buildScenarioLabels } from "@/shared/acoustic-corpus-recorder";
+import { encodePcm16MonoWav } from "@/shared/wav-writer";
+import { FingerprintGenerator } from "@/shared/fingerprint-generator";
+import { FingerprintCorrelator } from "@/shared/fingerprint-correlator";
+import { SellerAudioFingerprintSync } from "@/shared/seller-audio-fingerprint-sync";
+import { SellerRoomsPanel } from "@/shared/seller-rooms-panel";
+import type { AcousticClass } from "@/shared/fingerprint-types";
+import type { SellerRoomSummary } from "@/types/desktop-api";
 import { SessionGate } from "@/shared/session-gate";
 import { useAuth } from "@/shared/auth-context";
 
@@ -31,7 +40,7 @@ type CaptureErrorInfo = {
   ts: number;
 };
 
-type CaptureStatus = "idle" | "capturing";
+type CaptureStatus = "idle" | "starting" | "capturing";
 type CaptureStreamRole = "host" | "participant";
 type CaptureStreamResult = {
   role: CaptureStreamRole;
@@ -181,6 +190,7 @@ function HomeAuthenticated() {
   const [bridgeReady, setBridgeReady] = useState(false);
   const [isElectronRuntime, setIsElectronRuntime] = useState(false);
   const [captureStatus, setCaptureStatus] = useState<CaptureStatus>("idle");
+  const captureStartInFlightRef = useRef(false);
   const [clickThrough, setClickThrough] = useState(false);
   const [config, setConfig] = useState<DesktopConfig | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
@@ -226,6 +236,23 @@ function HomeAuthenticated() {
   const [hostAudioMeter, setHostAudioMeter] = useState<AudioMeter>(EMPTY_AUDIO_METER);
   const [remoteAudioMeter, setRemoteAudioMeter] =
     useState<AudioMeter>(EMPTY_AUDIO_METER);
+  const [corpusScenario, setCorpusScenario] = useState("self_roundtrip");
+  const [corpusDir, setCorpusDir] = useState("");
+  const [corpusRecording, setCorpusRecording] = useState(false);
+  const [corpusStatus, setCorpusStatus] = useState("");
+  const corpusRecorderRef = useRef(new AcousticCorpusRecorder());
+  const [sellerRooms, setSellerRooms] = useState<SellerRoomSummary[]>([]);
+  const [activeSellerRoomId, setActiveSellerRoomId] = useState("");
+  const [sellerRoomName, setSellerRoomName] = useState("Sala de vendedores");
+  const [inviteeEmail, setInviteeEmail] = useState("");
+  const [sellerRoomStatus, setSellerRoomStatus] = useState("");
+  const [acousticClass, setAcousticClass] = useState<AcousticClass>("unknown");
+  const [correlationConfidence, setCorrelationConfidence] = useState(0);
+  const [syncJoined, setSyncJoined] = useState(false);
+  const [syncPresenceIds, setSyncPresenceIds] = useState<string[]>([]);
+  const fingerprintSyncRef = useRef<SellerAudioFingerprintSync | null>(null);
+  const fingerprintGeneratorRef = useRef(new FingerprintGenerator());
+  const fingerprintCorrelatorRef = useRef(new FingerprintCorrelator());
   const audioWsState = useMemo(
     () => mergeAudioWsStates(hostAudioWsState, remoteAudioWsState),
     [hostAudioWsState, remoteAudioWsState],
@@ -234,6 +261,21 @@ function HomeAuthenticated() {
     () => mergeAudioMeters(hostAudioMeter, remoteAudioMeter),
     [hostAudioMeter, remoteAudioMeter],
   );
+  useEffect(() => {
+    if (!bridgeReady || !window.desktopApi?.sellerRoomsList) return;
+    void refreshSellerRooms();
+    const timer = window.setInterval(() => {
+      void refreshSellerRooms();
+    }, 10_000);
+    return () => window.clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bridgeReady]);
+
+  useEffect(() => {
+    if (!bridgeReady || !window.desktopApi?.getAcousticCorpusDir) return;
+    void window.desktopApi.getAcousticCorpusDir().then((dir) => setCorpusDir(dir));
+  }, [bridgeReady]);
+
   const isBridgeAvailable = bridgeReady;
 
   const appendLog = useCallback((message: string) => {
@@ -278,7 +320,75 @@ function HomeAuthenticated() {
         (message) => appendLog(`[remote] ${message}`),
         (state) => setRemoteAudioWsState(state),
         (meter) => setRemoteAudioMeter(meter),
+        (payload) => {
+          const api = window.desktopApi;
+          if (!api) return;
+          void api.publishDirectFeedback(payload).catch((error) => {
+            appendLog(
+              `[remote] direct feedback IPC failed: ${error instanceof Error ? error.message : String(error)}`,
+            );
+          });
+        },
       ),
+  );
+
+  const syncCorpusTaps = useCallback(
+    (enabled: boolean) => {
+      const recorder = corpusRecorderRef.current;
+      hostCaptureService.setOnPcmFrame(
+        enabled ? (pcm) => recorder.onMicFrame(pcm) : null,
+      );
+      remoteCaptureService.setOnPcmFrame(
+        enabled ? (pcm) => recorder.onLoopbackFrame(pcm) : null,
+      );
+    },
+    [hostCaptureService, remoteCaptureService],
+  );
+
+  const wireAcousticPipeline = useCallback(
+    (enabled: boolean, roomId: string, meeting: string) => {
+      if (!enabled || !roomId || !session.user) {
+        hostCaptureService.setOnPcmFrame(null);
+        remoteCaptureService.setOnPcmFrame(null);
+        return;
+      }
+      const sync = fingerprintSyncRef.current;
+      const generator = fingerprintGeneratorRef.current;
+      const correlator = fingerprintCorrelatorRef.current;
+      generator.reset();
+      correlator.reset();
+
+      hostCaptureService.setOnPcmFrame((pcm) => {
+        if (!sync?.isJoined()) return;
+        const fps = generator.pushPcm(pcm, {
+          userId: session.user!.id,
+          sellerRoomId: roomId,
+          meetingId: meeting,
+        });
+        for (const fp of fps) sync.publish(fp);
+      });
+
+      remoteCaptureService.setOnPcmFrame((pcm) => {
+        if (!sync?.isJoined()) return;
+        const results = correlator.pushLoopback(pcm, sync.getRemoteBuffer(), {
+          sellerRoomId: roomId,
+          meetingId: meeting,
+        });
+        const last = results[results.length - 1];
+        if (!last) return;
+        setAcousticClass(last.acousticClass);
+        setCorrelationConfidence(last.confidence);
+        remoteCaptureService.setAcousticLabel({
+          acousticClass: last.acousticClass,
+          matchedSellerId: last.matchedSellerId,
+          confidence: last.confidence,
+          lagMs: last.lagMs,
+          windowStartMs: last.windowStartMs ?? Date.now() - 200,
+          windowEndMs: last.windowEndMs ?? Date.now(),
+        });
+      });
+    },
+    [hostCaptureService, remoteCaptureService, session.user],
   );
 
   useEffect(() => {
@@ -423,6 +533,7 @@ function HomeAuthenticated() {
 
   async function handleStartCapture(): Promise<void> {
     if (!window.desktopApi || !config) return;
+    if (captureStartInFlightRef.current || captureStatus !== "idle") return;
     if (!session.isAuthenticated || !session.tenant) {
       reportError(
         "start-capture",
@@ -430,6 +541,8 @@ function HomeAuthenticated() {
       );
       return;
     }
+    captureStartInFlightRef.current = true;
+    setCaptureStatus("starting");
     try {
       setCaptureError(null);
       const tenantId = session.tenant.id;
@@ -470,6 +583,7 @@ function HomeAuthenticated() {
           debug: debugLogs,
           tenantId,
           getAccessToken,
+          sellerRoomId: activeSellerRoomId || undefined,
         });
         results.push({ role: "host", ...hostResult });
       }
@@ -501,8 +615,45 @@ function HomeAuthenticated() {
           debug: debugLogs,
           tenantId,
           getAccessToken,
+          sellerRoomId: activeSellerRoomId || undefined,
+          pcmVersion: activeSellerRoomId ? 2 : 1,
         });
         results.push({ role: "participant", ...remoteResult });
+      }
+
+      if (activeSellerRoomId && session.user && session.tenant) {
+        await fingerprintSyncRef.current?.disconnect();
+        const sync = new SellerAudioFingerprintSync({
+          backendHttpBase: resolvedFeedbackBase,
+          getAccessToken,
+          sellerRoomId: activeSellerRoomId,
+          meetingId: resolvedMeetingId,
+          tenantId: session.tenant.id,
+          onError: (message) => appendLog(`seller-room: ${message}`),
+          onJoined: (payload) => {
+            setSyncJoined(true);
+            setSyncPresenceIds(payload.presence);
+            setSellerRoomStatus(
+              `Joined | members=${payload.members.length} | presence=${payload.presence.length}`,
+            );
+            appendLog("seller-room: fingerprint sync joined");
+            void refreshSellerRooms();
+          },
+          onPresenceUpdated: (payload) => {
+            setSyncPresenceIds(payload.onlineUserIds);
+            void refreshSellerRooms();
+          },
+          onRoomEnded: (reason) => {
+            setSyncJoined(false);
+            setSyncPresenceIds([]);
+            setSellerRoomStatus(`Room ended: ${reason}`);
+            setAcousticClass("unknown");
+            void refreshSellerRooms();
+          },
+        });
+        fingerprintSyncRef.current = sync;
+        await sync.connect();
+        wireAcousticPipeline(true, activeSellerRoomId, resolvedMeetingId);
       }
 
       setCaptureStatus("capturing");
@@ -520,12 +671,22 @@ function HomeAuthenticated() {
       setCaptureStatus("idle");
       setCaptureDetails("");
       await stopAllCaptureServices();
+    } finally {
+      captureStartInFlightRef.current = false;
     }
   }
 
   async function handleStopCapture(): Promise<void> {
     if (!window.desktopApi) return;
     try {
+      syncCorpusTaps(false);
+      wireAcousticPipeline(false, "", "");
+      await fingerprintSyncRef.current?.disconnect();
+      fingerprintSyncRef.current = null;
+      setSyncJoined(false);
+      setSyncPresenceIds([]);
+      setAcousticClass("unknown");
+      setCorrelationConfidence(0);
       await stopAllCaptureServices();
       setCaptureStatus("idle");
       setCaptureDetails("");
@@ -534,6 +695,167 @@ function HomeAuthenticated() {
       setLogs((prev) => [...prev, ...state.logs].slice(0, 250));
     } catch (error) {
       reportError("stop-capture", error);
+    }
+  }
+
+  async function refreshSellerRooms(): Promise<void> {
+    if (!window.desktopApi?.sellerRoomsList) return;
+    try {
+      const rooms = await window.desktopApi.sellerRoomsList();
+      setSellerRooms(rooms);
+    } catch (error) {
+      reportError("seller-rooms-list", error);
+    }
+  }
+
+  async function handleCreateSellerRoom(): Promise<void> {
+    if (!window.desktopApi?.sellerRoomsCreate) return;
+    try {
+      const room = await window.desktopApi.sellerRoomsCreate({
+        name: sellerRoomName.trim() || "Sala de vendedores",
+        meetingId: resolveEffectiveMeetingId(meetUrl, meetingId),
+        meetUrl: meetUrl || undefined,
+      });
+      setActiveSellerRoomId(room.id);
+      setSellerRoomStatus(`Created ${room.name} (${room.status})`);
+      await refreshSellerRooms();
+    } catch (error) {
+      reportError("seller-rooms-create", error);
+    }
+  }
+
+  async function handleSelectSellerRoom(roomId: string): Promise<void> {
+    setActiveSellerRoomId(roomId);
+    const room = sellerRooms.find((r) => r.id === roomId);
+    setSellerRoomStatus(
+      room
+        ? `Selecionada: ${room.name} (${room.onlineCount ?? 0} online)`
+        : `Selecionada: ${roomId}`,
+    );
+  }
+
+  async function handleJoinSellerRoom(roomId: string): Promise<void> {
+    if (!window.desktopApi?.sellerRoomsJoin) return;
+    try {
+      const room = await window.desktopApi.sellerRoomsJoin({ id: roomId });
+      setActiveSellerRoomId(room.id);
+      setSellerRoomStatus(`Joined ${room.name} (${room.status})`);
+      await refreshSellerRooms();
+    } catch (error) {
+      reportError("seller-rooms-join", error);
+    }
+  }
+
+  async function handleLeaveSellerRoom(roomId: string): Promise<void> {
+    if (!window.desktopApi?.sellerRoomsLeave) return;
+    try {
+      await window.desktopApi.sellerRoomsLeave({ id: roomId });
+      if (activeSellerRoomId === roomId) {
+        setActiveSellerRoomId("");
+        setSyncJoined(false);
+        setSyncPresenceIds([]);
+        await fingerprintSyncRef.current?.disconnect();
+        fingerprintSyncRef.current = null;
+      }
+      setSellerRoomStatus("Saiu da sala");
+      await refreshSellerRooms();
+    } catch (error) {
+      reportError("seller-rooms-leave", error);
+    }
+  }
+
+  async function handleAcceptSellerRoomInvite(
+    invitationId: string,
+  ): Promise<void> {
+    if (!window.desktopApi?.sellerRoomsAccept) return;
+    try {
+      const room = await window.desktopApi.sellerRoomsAccept({ invitationId });
+      setActiveSellerRoomId(room.id);
+      setSellerRoomStatus(`Convite aceito: ${room.name}`);
+      await refreshSellerRooms();
+    } catch (error) {
+      reportError("seller-rooms-accept", error);
+    }
+  }
+
+  async function handleInviteSellerRoom(): Promise<void> {
+    if (!window.desktopApi?.sellerRoomsInvite || !activeSellerRoomId) return;
+    const email = inviteeEmail.trim().toLowerCase();
+    if (!email) return;
+    try {
+      await window.desktopApi.sellerRoomsInvite({
+        id: activeSellerRoomId,
+        email,
+      });
+      setSellerRoomStatus(`Invite sent to ${email}`);
+      setInviteeEmail("");
+      await refreshSellerRooms();
+    } catch (error) {
+      reportError("seller-rooms-invite", error);
+    }
+  }
+
+  async function handleEndSellerRoom(roomId?: string): Promise<void> {
+    const id = roomId || activeSellerRoomId;
+    if (!window.desktopApi?.sellerRoomsEnd || !id) return;
+    try {
+      await window.desktopApi.sellerRoomsEnd({ id });
+      if (activeSellerRoomId === id) {
+        setActiveSellerRoomId("");
+        setSyncJoined(false);
+        setSyncPresenceIds([]);
+        await fingerprintSyncRef.current?.disconnect();
+        fingerprintSyncRef.current = null;
+      }
+      setSellerRoomStatus("Room ended");
+      await refreshSellerRooms();
+    } catch (error) {
+      reportError("seller-rooms-end", error);
+    }
+  }
+
+  async function handleStartCorpusRecording(): Promise<void> {
+    if (!window.desktopApi?.saveAcousticCorpus || !session.user) return;
+    corpusRecorderRef.current.start();
+    setCorpusRecording(true);
+    setCorpusStatus("Gravando corpus (mic + loopback)...");
+    syncCorpusTaps(true);
+    appendLog("acoustic-corpus: recording started");
+  }
+
+  async function handleStopCorpusRecording(): Promise<void> {
+    if (!window.desktopApi?.saveAcousticCorpus || !session.user) return;
+    syncCorpusTaps(false);
+    setCorpusRecording(false);
+    const recorder = corpusRecorderRef.current;
+    recorder.stop();
+    const sessionId = `corpus-${Date.now()}`;
+    const durationMs = Math.max(1, recorder.getDurationMs());
+    try {
+      const { manifest, micPcm, loopbackPcm } = recorder.buildSavePayload({
+        session_id: sessionId,
+        scenario: corpusScenario,
+        seller_user_id: session.user.id,
+        listener_user_id: session.user.id,
+        meeting_id: effectiveMeetingId || "phase0-dev",
+        seller_room_id: "phase0-dev",
+        simulated_lag_ms: 0,
+        labels: buildScenarioLabels(corpusScenario, durationMs, session.user.id),
+      });
+      const result = await window.desktopApi.saveAcousticCorpus({
+        manifest,
+        micWav: encodePcm16MonoWav(micPcm, sampleRate),
+        loopbackWav: encodePcm16MonoWav(loopbackPcm, sampleRate),
+      });
+      const micDurationSec = micPcm.length / sampleRate;
+      const loopbackDurationSec = loopbackPcm.length / sampleRate;
+      setCorpusStatus(
+        `Corpus salvo: ${result.sessionDir} (${micDurationSec.toFixed(1)}s mic, ${loopbackDurationSec.toFixed(1)}s loopback)`,
+      );
+      appendLog(`acoustic-corpus: saved ${result.sessionDir}`);
+    } catch (error) {
+      reportError("acoustic-corpus-save", error);
+      setCorpusStatus("Falha ao salvar corpus.");
     }
   }
 
@@ -981,7 +1303,7 @@ function HomeAuthenticated() {
               <button
                 className={btnPrimary}
                 onClick={handleStartCapture}
-                disabled={!isBridgeAvailable || captureStatus === "capturing"}
+                disabled={!isBridgeAvailable || captureStatus !== "idle"}
                 type="button"
               >
                 Start capture
@@ -989,7 +1311,7 @@ function HomeAuthenticated() {
               <button
                 className={btnDanger}
                 onClick={handleStopCapture}
-                disabled={!isBridgeAvailable || captureStatus === "idle"}
+                disabled={!isBridgeAvailable || captureStatus !== "capturing"}
                 type="button"
               >
                 Stop capture
@@ -997,6 +1319,81 @@ function HomeAuthenticated() {
               <button className={btn} onClick={handleToggleClickThrough} disabled={!isBridgeAvailable} type="button">
                 Overlay click-through: {clickThrough ? "on" : "off"}
               </button>
+            </div>
+            <SellerRoomsPanel
+              rooms={sellerRooms}
+              currentUserId={session.user?.id}
+              activeSellerRoomId={activeSellerRoomId}
+              sellerRoomName={sellerRoomName}
+              inviteeEmail={inviteeEmail}
+              sellerRoomStatus={sellerRoomStatus}
+              acousticClass={acousticClass}
+              correlationConfidence={correlationConfidence}
+              syncJoined={syncJoined}
+              syncPresenceIds={syncPresenceIds}
+              disabled={!isBridgeAvailable || !window.desktopApi?.sellerRoomsList}
+              onSellerRoomNameChange={setSellerRoomName}
+              onInviteeEmailChange={setInviteeEmail}
+              onRefresh={() => void refreshSellerRooms()}
+              onCreate={() => void handleCreateSellerRoom()}
+              onSelectRoom={(roomId) => void handleSelectSellerRoom(roomId)}
+              onJoinMembership={(roomId) => void handleJoinSellerRoom(roomId)}
+              onLeave={(roomId) => void handleLeaveSellerRoom(roomId)}
+              onAcceptInvite={(invitationId) =>
+                void handleAcceptSellerRoomInvite(invitationId)
+              }
+              onInvite={() => void handleInviteSellerRoom()}
+              onEnd={(roomId) => void handleEndSellerRoom(roomId)}
+            />
+            <div className="mt-4 rounded-lg border border-zinc-800 bg-zinc-950/50 p-3">
+              <p className="mb-2 font-mono text-[11px] font-semibold uppercase tracking-wide text-zinc-400">
+                Acoustic corpus (Fase 0)
+              </p>
+              <div className="mb-2 flex flex-wrap items-center gap-2">
+                <label className="font-mono text-[11px] text-zinc-400" htmlFor="corpus-scenario">
+                  Cenario:
+                </label>
+                <select
+                  id="corpus-scenario"
+                  className="rounded border border-zinc-700 bg-zinc-900 px-2 py-1 font-mono text-[11px] text-zinc-200"
+                  value={corpusScenario}
+                  onChange={(e) => setCorpusScenario(e.target.value)}
+                  disabled={corpusRecording}
+                >
+                  <option value="self_roundtrip">self_roundtrip</option>
+                  <option value="customer_only">customer_only</option>
+                  <option value="overlap">overlap</option>
+                </select>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  className={btn}
+                  onClick={handleStartCorpusRecording}
+                  disabled={
+                    !isBridgeAvailable ||
+                    corpusRecording ||
+                    captureStatus !== "capturing" ||
+                    !window.desktopApi?.saveAcousticCorpus
+                  }
+                  type="button"
+                >
+                  Start corpus recording
+                </button>
+                <button
+                  className={btnDanger}
+                  onClick={handleStopCorpusRecording}
+                  disabled={!isBridgeAvailable || !corpusRecording}
+                  type="button"
+                >
+                  Stop and save corpus
+                </button>
+              </div>
+              {corpusDir ? (
+                <p className="mt-2 font-mono text-[10px] text-zinc-500">Dir: {corpusDir}</p>
+              ) : null}
+              {corpusStatus ? (
+                <p className="mt-2 font-mono text-[11px] text-zinc-300">{corpusStatus}</p>
+              ) : null}
             </div>
             {!isBridgeAvailable ? (
               <p className="mt-2 font-mono text-[11px] text-amber-300">
