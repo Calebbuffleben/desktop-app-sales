@@ -70,6 +70,8 @@ export type PlaybookTemplateSummary = {
   title: string;
   description: string | null;
   steps: unknown;
+  /** Original PDF filename when a source doc was uploaded (admin only). */
+  sourcePdfFileName: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -222,6 +224,15 @@ type DesktopApi = {
     payload: { id: string } & UpdatePlaybookTemplatePayload,
   ) => Promise<PlaybookTemplateSummary>;
   playbooksRemove: (payload: { id: string }) => Promise<{ deleted: true } | unknown>;
+  /** Upload PDF source for RAG indexing (admin path; not used during Live call). */
+  playbooksUploadSourcePdf: (payload: {
+    id: string;
+    fileName: string;
+    data: Uint8Array | number[];
+  }) => Promise<PlaybookTemplateSummary>;
+  playbooksRemoveSourcePdf: (payload: {
+    id: string;
+  }) => Promise<PlaybookTemplateSummary>;
   getAcousticCorpusDir: () => Promise<string>;
   saveAcousticCorpus: (payload: {
     manifest: Record<string, unknown>;

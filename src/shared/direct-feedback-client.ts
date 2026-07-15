@@ -88,6 +88,19 @@ export class DirectFeedbackClient {
       if (this.seenIds.has(id)) return;
       this.seenIds.add(id);
     }
+    const meta = (payload.metadata || {}) as Record<string, unknown>;
+    const speechAnchor =
+      Number(meta.speechAnchorMs ?? meta.speechEndMs ?? payload.windowEnd ?? 0) || 0;
+    if (speechAnchor > 0) {
+      const perceivedMs = Math.max(0, Date.now() - speechAnchor);
+      if (this.opts.debug || perceivedMs > 1000) {
+        console.log(
+          `[direct-feedback] client.feedback_received perceivedMs=${perceivedMs} turnId=${String(
+            meta.turnId || "",
+          )} traceId=${String(meta.feedbackTraceId || "")}`,
+        );
+      }
+    }
     this.opts.onFeedback(payload);
   }
 

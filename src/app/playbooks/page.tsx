@@ -111,6 +111,9 @@ function PlaybooksScreen() {
   const [description, setDescription] = useState("");
   const [stepRows, setStepRows] = useState<StepRow[]>([emptyStep()]);
   const [saving, setSaving] = useState(false);
+  const [sourcePdfFileName, setSourcePdfFileName] = useState<string | null>(null);
+  const [pendingPdf, setPendingPdf] = useState<File | null>(null);
+  const [clearPdfOnSave, setClearPdfOnSave] = useState(false);
 
   const refresh = useCallback(async () => {
     const api = window.desktopApi;
@@ -138,6 +141,9 @@ function PlaybooksScreen() {
     setTitle("");
     setDescription("");
     setStepRows([emptyStep()]);
+    setSourcePdfFileName(null);
+    setPendingPdf(null);
+    setClearPdfOnSave(false);
     setPanelOpen(true);
     setBanner(null);
     setError(null);
@@ -149,6 +155,9 @@ function PlaybooksScreen() {
     setTitle(row.title);
     setDescription(row.description ?? "");
     setStepRows(parseStepsFromApi(row.steps));
+    setSourcePdfFileName(row.sourcePdfFileName ?? null);
+    setPendingPdf(null);
+    setClearPdfOnSave(false);
     setPanelOpen(true);
     setBanner(null);
     setError(null);
@@ -183,7 +192,7 @@ function PlaybooksScreen() {
 
   const handleSave = async () => {
     const api = window.desktopApi;
-    if (!api) return;
+    if (!api?.playbooksCreate || !api.playbooksUpdate) return;
     const msg = validateForm();
     if (msg) {
       setError(msg);
@@ -195,6 +204,7 @@ function PlaybooksScreen() {
       stepRows.filter((r) => r.id.trim() && r.label.trim()),
     );
     try {
+      let playbookId = editId;
       if (editId) {
         await api.playbooksUpdate({
           id: editId,
@@ -202,7 +212,6 @@ function PlaybooksScreen() {
           description: description.trim() || undefined,
           steps: stepsPayload,
         });
-        setBanner("Playbook atualizado.");
       } else {
         const body: CreatePlaybookTemplatePayload = {
           key: templateKey.trim(),
@@ -210,9 +219,22 @@ function PlaybooksScreen() {
           ...(description.trim() ? { description: description.trim() } : {}),
           steps: stepsPayload,
         };
-        await api.playbooksCreate(body);
-        setBanner("Playbook criado.");
+        const created = await api.playbooksCreate(body);
+        playbookId = created.id;
       }
+
+      if (playbookId && clearPdfOnSave && api.playbooksRemoveSourcePdf) {
+        await api.playbooksRemoveSourcePdf({ id: playbookId });
+      } else if (playbookId && pendingPdf && api.playbooksUploadSourcePdf) {
+        const buf = new Uint8Array(await pendingPdf.arrayBuffer());
+        await api.playbooksUploadSourcePdf({
+          id: playbookId,
+          fileName: pendingPdf.name,
+          data: buf,
+        });
+      }
+
+      setBanner(editId ? "Playbook atualizado." : "Playbook criado.");
       closePanel();
       await refresh();
     } catch (err) {
@@ -420,6 +442,58 @@ function PlaybooksScreen() {
                     onChange={(e) => setDescription(e.target.value)}
                     placeholder="Notas internas (opcional)"
                   />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-zinc-500">
+                    PDF de origem (RAG — só no cadastro)
+                  </label>
+                  <p className="mt-1 text-[10px] leading-relaxed text-zinc-600">
+                    O texto é extraído ao guardar e indexado no próximo warm da call. Não afeta a latência do
+                    overlay.
+                  </p>
+                  {(sourcePdfFileName && !clearPdfOnSave) || pendingPdf ? (
+                    <p className="mt-2 font-mono text-[11px] text-cyan-200/90">
+                      {pendingPdf
+                        ? `Novo: ${pendingPdf.name}`
+                        : `Atual: ${sourcePdfFileName}`}
+                    </p>
+                  ) : (
+                    <p className="mt-2 text-[11px] text-zinc-600">Nenhum PDF anexado.</p>
+                  )}
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <label className={`${btn} cursor-pointer`}>
+                      Escolher PDF
+                      <input
+                        type="file"
+                        accept="application/pdf,.pdf"
+                        className="hidden"
+                        onChange={(e) => {
+                          const f = e.target.files?.[0] ?? null;
+                          setPendingPdf(f);
+                          setClearPdfOnSave(false);
+                          e.target.value = "";
+                        }}
+                      />
+                    </label>
+                    {(sourcePdfFileName || pendingPdf) && !clearPdfOnSave ? (
+                      <button
+                        type="button"
+                        className={btnDanger}
+                        onClick={() => {
+                          setPendingPdf(null);
+                          setClearPdfOnSave(Boolean(sourcePdfFileName));
+                        }}
+                      >
+                        Remover PDF
+                      </button>
+                    ) : null}
+                    {clearPdfOnSave ? (
+                      <span className="text-[10px] text-rose-300/90">
+                        Será removido ao guardar.
+                      </span>
+                    ) : null}
+                  </div>
                 </div>
 
                 <div>
