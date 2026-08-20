@@ -263,11 +263,38 @@ function HomeAuthenticated() {
   );
   useEffect(() => {
     if (!bridgeReady || !window.desktopApi?.sellerRoomsList) return;
-    void refreshSellerRooms();
-    const timer = window.setInterval(() => {
-      void refreshSellerRooms();
-    }, 10_000);
-    return () => window.clearInterval(timer);
+    let cancelled = false;
+    let failStreak = 0;
+    let timer: number | undefined;
+
+    const schedule = (ms: number) => {
+      timer = window.setTimeout(() => {
+        void tick();
+      }, ms);
+    };
+
+    const tick = async () => {
+      if (cancelled || !window.desktopApi?.sellerRoomsList) return;
+      try {
+        const rooms = await window.desktopApi.sellerRoomsList();
+        if (cancelled) return;
+        setSellerRooms(rooms);
+        failStreak = 0;
+        schedule(10_000);
+      } catch (error) {
+        if (cancelled) return;
+        failStreak += 1;
+        // Avoid stacking "Application failed to respond" every 10s when backend is down.
+        if (failStreak === 1) reportError("seller-rooms-list", error);
+        schedule(Math.min(60_000, 10_000 * 2 ** Math.min(failStreak - 1, 2)));
+      }
+    };
+
+    void tick();
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bridgeReady]);
 

@@ -39,6 +39,8 @@ const ALLOWED_INVOKE_CHANNELS = new Set([
   "playbooks:create",
   "playbooks:update",
   "playbooks:remove",
+  "playbooks:upload-source-pdf",
+  "playbooks:remove-source-pdf",
   "acoustic:get-corpus-dir",
   "acoustic:save-corpus",
   "seller-rooms:list",
@@ -145,6 +147,10 @@ contextBridge.exposeInMainWorld(
     playbooksCreate: (payload) => invokeStrict("playbooks:create", ensureObjectOrUndefined(payload)),
     playbooksUpdate: (payload) => invokeStrict("playbooks:update", ensureObjectOrUndefined(payload)),
     playbooksRemove: (payload) => invokeStrict("playbooks:remove", ensureObjectOrUndefined(payload)),
+    playbooksUploadSourcePdf: (payload) =>
+      invokeStrict("playbooks:upload-source-pdf", ensureObjectOrUndefined(payload)),
+    playbooksRemoveSourcePdf: (payload) =>
+      invokeStrict("playbooks:remove-source-pdf", ensureObjectOrUndefined(payload)),
     getAcousticCorpusDir: () => invokeStrict("acoustic:get-corpus-dir"),
     saveAcousticCorpus: (payload) =>
       invokeStrict("acoustic:save-corpus", ensureObjectOrUndefined(payload)),

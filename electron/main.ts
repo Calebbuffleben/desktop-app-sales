@@ -1106,6 +1106,46 @@ function registerIpcHandlers(): void {
     return authedJson("DELETE", `/playbooks/${encodeURIComponent(id)}`);
   });
 
+  ipcMain.handle(
+    "playbooks:upload-source-pdf",
+    async (_event, payload?: Record<string, unknown>) => {
+      const id = ensureStringField(payload?.id, "id");
+      const fileName =
+        typeof payload?.fileName === "string" && payload.fileName.trim()
+          ? payload.fileName.trim()
+          : "document.pdf";
+      const raw = payload?.data;
+      let bytes: Uint8Array;
+      if (raw instanceof Uint8Array) {
+        bytes = raw;
+      } else if (Array.isArray(raw)) {
+        bytes = Uint8Array.from(raw as number[]);
+      } else if (raw && typeof raw === "object" && ArrayBuffer.isView(raw)) {
+        bytes = new Uint8Array(
+          (raw as ArrayBufferView).buffer,
+          (raw as ArrayBufferView).byteOffset,
+          (raw as ArrayBufferView).byteLength,
+        );
+      } else {
+        throw new Error("playbooks:upload-source-pdf requires data bytes");
+      }
+      return authedMultipart(
+        "POST",
+        `/playbooks/${encodeURIComponent(id)}/source-pdf`,
+        fileName,
+        Buffer.from(bytes),
+      );
+    },
+  );
+
+  ipcMain.handle(
+    "playbooks:remove-source-pdf",
+    async (_event, payload?: Record<string, unknown>) => {
+      const id = ensureStringField(payload?.id, "id");
+      return authedJson("DELETE", `/playbooks/${encodeURIComponent(id)}/source-pdf`);
+    },
+  );
+
   ipcMain.handle("seller-rooms:list", async () => authedJson("GET", "/seller-rooms"));
   ipcMain.handle("seller-rooms:get", async (_event, payload?: Record<string, unknown>) => {
     const id = ensureStringField(payload?.id, "id");
@@ -1205,6 +1245,53 @@ async function authedJson(
   }
   const response = await fetch(url, init);
   if (response.status === 204) return { ok: true };
+  const text = await response.text();
+  let parsed: unknown = null;
+  if (text) {
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      parsed = { message: text };
+    }
+  }
+  if (!response.ok) {
+    const message =
+      (parsed && typeof parsed === "object" && (parsed as { message?: unknown }).message) ||
+      `HTTP ${response.status}`;
+    const err = new Error(String(message));
+    (err as Error & { status?: number }).status = response.status;
+    throw err;
+  }
+  return parsed ?? { ok: true };
+}
+
+/** Multipart upload (playbook PDF) — admin path only; never on Live hot path. */
+async function authedMultipart(
+  method: "POST",
+  path: string,
+  fileName: string,
+  fileBytes: Buffer,
+): Promise<unknown> {
+  const ctx = authService.getAuthContext();
+  if (!ctx) {
+    throw new Error("not authenticated");
+  }
+  const accessToken = (await authService.getAccessToken()) ?? ctx.accessToken;
+  const url = `${ctx.backendHttpBase.replace(/\/$/, "")}${path}`;
+  const form = new FormData();
+  form.append(
+    "file",
+    new Blob([new Uint8Array(fileBytes)], { type: "application/pdf" }),
+    fileName.endsWith(".pdf") ? fileName : `${fileName}.pdf`,
+  );
+  const response = await fetch(url, {
+    method,
+    headers: {
+      Accept: "application/json",
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: form,
+  });
   const text = await response.text();
   let parsed: unknown = null;
   if (text) {
