@@ -90,7 +90,7 @@ export class DirectFeedbackClient {
     }
     const meta = (payload.metadata || {}) as Record<string, unknown>;
     const speechAnchor =
-      Number(meta.speechAnchorMs ?? meta.speechEndMs ?? payload.windowEnd ?? 0) || 0;
+      Number(meta.speechAnchorMs ?? meta.speechEndMs ?? meta.windowEndMs ?? 0) || 0;
     if (speechAnchor > 0) {
       const perceivedMs = Math.max(0, Date.now() - speechAnchor);
       if (this.opts.debug || perceivedMs > 1000) {

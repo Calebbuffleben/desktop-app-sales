@@ -314,7 +314,7 @@ function PlaybooksScreen() {
             <p className="mt-2 max-w-xl text-xs leading-relaxed text-zinc-500">
               Roteiros com botões no overlay (copiar texto, dicas). A chave de cada playbook deve coincidir com o
               que a análise automática envia (ex.: <code className="text-cyan-200/90">objecao_tempo</code>). Ver{" "}
-              <code className="text-zinc-400">PLAYBOOKS.md</code> na raiz do projeto.
+              <code className="text-zinc-400">playbooks/README.md</code> na raiz do projeto.
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
