@@ -21,7 +21,7 @@ import {
   DesktopFeedbackClient,
   type FeedbackConnectionState,
 } from "@/shared/feedback-client";
-import { httpBaseToWsBase, resolveEffectiveMeetingId } from "@/shared/egress-audio-protocol";
+import { httpBaseToWsBase, resolveEffectiveMeetingId, wsToHttpBase } from "@/shared/egress-audio-protocol";
 import { AcousticCorpusRecorder, buildScenarioLabels } from "@/shared/acoustic-corpus-recorder";
 import { encodePcm16MonoWav } from "@/shared/wav-writer";
 import { FingerprintGenerator } from "@/shared/fingerprint-generator";
@@ -204,7 +204,7 @@ function HomeAuthenticated() {
   const [validationResult, setValidationResult] = useState("");
   const [sourceMode, setSourceMode] = useState<AudioSourceMode>("auto");
   const [captureDetails, setCaptureDetails] = useState("");
-  const [feedbackBase, setFeedbackBase] = useState("https://backend-analysis-production-a688.up.railway.app");
+  const [feedbackBase, setFeedbackBase] = useState("");
   const [anchorMode, setAnchorMode] = useState<"fixed" | "meet-window">("fixed");
   const [debugLogs, setDebugLogs] = useState(false);
   const [forcePolling, setForcePolling] = useState(false);
@@ -229,6 +229,7 @@ function HomeAuthenticated() {
     notes: string[];
   } | null>(null);
   const [captureError, setCaptureError] = useState<CaptureErrorInfo | null>(null);
+  const [entitled, setEntitled] = useState<boolean | null>(null);
   const [readiness, setReadiness] = useState<CaptureReadiness | null>(null);
   const [displaySources, setDisplaySources] = useState<DisplaySource[]>([]);
   const [selectedSourceId, setSelectedSourceId] = useState<string>("");
@@ -250,6 +251,28 @@ function HomeAuthenticated() {
   const [correlationConfidence, setCorrelationConfidence] = useState(0);
   const [syncJoined, setSyncJoined] = useState(false);
   const [syncPresenceIds, setSyncPresenceIds] = useState<string[]>([]);
+  const [specialists, setSpecialists] = useState<
+    Array<{ key: string; name: string; description: string; source: string }>
+  >([]);
+  const [selectedSpecialists, setSelectedSpecialists] = useState<string[]>([]);
+  useEffect(() => {
+    if (!bridgeReady || !window.desktopApi?.specialistsCatalog) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const catalog = await window.desktopApi!.specialistsCatalog();
+        const prefs = await window.desktopApi!.specialistsPreferencesGet();
+        if (cancelled) return;
+        setSpecialists(catalog.specialists ?? []);
+        setSelectedSpecialists(prefs.specialistKeys ?? []);
+      } catch {
+        /* catalog is optional until backend is migrated */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [bridgeReady, session.isAuthenticated]);
   const fingerprintSyncRef = useRef<SellerAudioFingerprintSync | null>(null);
   const fingerprintGeneratorRef = useRef(new FingerprintGenerator());
   const fingerprintCorrelatorRef = useRef(new FingerprintCorrelator());
@@ -435,6 +458,19 @@ function HomeAuthenticated() {
   useEffect(() => {
     if (!bridgeReady || typeof window === "undefined") return;
     const desktopApi = window.desktopApi;
+    if (!desktopApi?.billingSubscription || !session.isAuthenticated) {
+      setEntitled(null);
+      return;
+    }
+    void desktopApi
+      .billingSubscription()
+      .then((snap) => setEntitled(snap.entitled !== false))
+      .catch(() => setEntitled(null));
+  }, [bridgeReady, session.isAuthenticated]);
+
+  useEffect(() => {
+    if (!bridgeReady || typeof window === "undefined") return;
+    const desktopApi = window.desktopApi;
     if (!desktopApi) return;
 
     void desktopApi
@@ -446,7 +482,9 @@ function HomeAuthenticated() {
         setLogs(state.logs);
         setMeetingId(state.meetingId || "");
         setFeedbackBase(
-          session.backendHttpBase || state.feedbackHttpBase || "https://backend-analysis-production-a688.up.railway.app",
+          session.backendHttpBase ||
+            state.feedbackHttpBase ||
+            (state.config ? wsToHttpBase(state.config.BACKEND_WS_BASE) : ""),
         );
         setAnchorMode(state.anchorMode);
         setSelectedSourceId(state.selectedSourceId || "");
@@ -523,7 +561,9 @@ function HomeAuthenticated() {
     ]);
   }, [hostCaptureService, remoteCaptureService]);
   const effectiveFeedbackBase =
-    session.backendHttpBase || feedbackBase || "http://localhost:3001";
+    session.backendHttpBase ||
+    feedbackBase ||
+    (config ? wsToHttpBase(config.BACKEND_WS_BASE) : "http://localhost:3001");
 
   useEffect(() => {
     if (!isBridgeAvailable || !effectiveMeetingId || !effectiveFeedbackBase) return;
@@ -568,6 +608,16 @@ function HomeAuthenticated() {
       );
       return;
     }
+    try {
+      const snap = await window.desktopApi.billingSubscription?.();
+      if (snap && snap.entitled === false) {
+        setEntitled(false);
+        reportError("start-capture", new Error("Assinatura inativa"));
+        return;
+      }
+    } catch {
+      /* login already succeeded; fail-open if billing snapshot is down */
+    }
     captureStartInFlightRef.current = true;
     setCaptureStatus("starting");
     try {
@@ -611,6 +661,7 @@ function HomeAuthenticated() {
           tenantId,
           getAccessToken,
           sellerRoomId: activeSellerRoomId || undefined,
+          specialists: selectedSpecialists,
         });
         results.push({ role: "host", ...hostResult });
       }
@@ -644,6 +695,7 @@ function HomeAuthenticated() {
           getAccessToken,
           sellerRoomId: activeSellerRoomId || undefined,
           pcmVersion: activeSellerRoomId ? 2 : 1,
+          specialists: selectedSpecialists,
         });
         results.push({ role: "participant", ...remoteResult });
       }
@@ -1156,6 +1208,47 @@ function HomeAuthenticated() {
                 <p>O cliente não precisa instalar nada; a fala dele vem pelo system/loopback do Meet.</p>
                 <p>Se o loopback falhar, a captura falha para evitar classificar cliente como host.</p>
               </div>
+              {specialists.length > 0 ? (
+                <div className={`${subbox} md:col-span-2`}>
+                  <p className="mb-2 font-mono text-[11px] uppercase tracking-wider text-zinc-400">
+                    Especialistas desta reunião
+                  </p>
+                  <div className="flex flex-col gap-2">
+                    {specialists.map((spec) => {
+                      const on = selectedSpecialists.includes(spec.key);
+                      return (
+                        <label key={spec.key} className="flex items-start gap-2 text-zinc-300">
+                          <input
+                            type="checkbox"
+                            className="mt-1 rounded border-zinc-600 text-cyan-500"
+                            checked={on}
+                            onChange={() => {
+                              const next = on
+                                ? selectedSpecialists.filter((k) => k !== spec.key)
+                                : [...selectedSpecialists, spec.key];
+                              setSelectedSpecialists(next);
+                              hostCaptureService.setSpecialists(next);
+                              remoteCaptureService.setSpecialists(next);
+                              void window.desktopApi?.specialistsPreferencesSave?.({
+                                specialistKeys: next,
+                              });
+                            }}
+                          />
+                          <span>
+                            <span className="text-sm text-zinc-100">{spec.name}</span>
+                            <span className="ml-2 font-mono text-[10px] text-zinc-500">
+                              {spec.source}
+                            </span>
+                            <span className="block text-xs text-zinc-500">
+                              {spec.description || spec.key}
+                            </span>
+                          </span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : null}
               <label className={`${labelCls} md:col-span-2`}>
                 Runtime flags
                 <div className={`${subbox} mt-2 space-y-2`}>
@@ -1327,10 +1420,24 @@ function HomeAuthenticated() {
             </div>
 
             <div className="flex flex-wrap gap-2">
+              {entitled === false ? (
+                <div className="w-full rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-100">
+                  Assinatura inativa. Regularize no portal de cobrança.
+                  {isAdmin ? (
+                    <button
+                      type="button"
+                      className="ml-3 rounded-md border border-cyan-500/40 px-2 py-0.5 text-xs text-cyan-100"
+                      onClick={() => void window.desktopApi?.billingOpenPortal?.()}
+                    >
+                      Gerenciar assinatura
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
               <button
                 className={btnPrimary}
                 onClick={handleStartCapture}
-                disabled={!isBridgeAvailable || captureStatus !== "idle"}
+                disabled={!isBridgeAvailable || captureStatus !== "idle" || entitled === false}
                 type="button"
               >
                 Start capture

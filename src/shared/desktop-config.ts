@@ -1,7 +1,15 @@
 import fs from "node:fs";
 import path from "node:path";
 
+export type DesktopProvider = "railway" | "cloud_run" | "local";
+
+type ProviderUrls = {
+  BACKEND_WS_BASE: string;
+  PYTHON_WS_BASE: string;
+};
+
 export type DesktopConfig = {
+  provider: DesktopProvider;
   BACKEND_WS_BASE: string;
   EGRESS_AUDIO_PATH: string;
   /** Bypass do backend: áudio e feedback direto com o python-service. */
@@ -17,11 +25,27 @@ export type DesktopConfig = {
   TAB_AUDIO_GATE_DBFS: number;
 };
 
-const DEFAULT_CONFIG: DesktopConfig = {
-  BACKEND_WS_BASE: "ws://localhost:3001",
+const PROVIDERS: Record<DesktopProvider, ProviderUrls> = {
+  cloud_run: {
+    BACKEND_WS_BASE:
+      "wss://backend-770631129946.southamerica-east1.run.app",
+    PYTHON_WS_BASE:
+      "wss://python-service-770631129946.southamerica-east1.run.app",
+  },
+  railway: {
+    BACKEND_WS_BASE:
+      "wss://backend-analysis-production-a688.up.railway.app",
+    PYTHON_WS_BASE: "wss://text-analysis-production.up.railway.app",
+  },
+  local: {
+    BACKEND_WS_BASE: "ws://localhost:3001",
+    PYTHON_WS_BASE: "ws://localhost:8000",
+  },
+};
+
+const DEFAULT_CONFIG: Omit<DesktopConfig, "provider" | keyof ProviderUrls> = {
   EGRESS_AUDIO_PATH: "/egress-audio",
   PYTHON_DIRECT_ENABLED: false,
-  PYTHON_WS_BASE: "ws://localhost:8000",
   PYTHON_WS_PATH: "/ws",
   DEFAULT_SAMPLE_RATE: 16000,
   DEFAULT_CHANNELS: 1,
@@ -51,6 +75,18 @@ function parseSignedNumber(value: string | undefined, fallback: number): number 
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function parseProvider(value: string | undefined): DesktopProvider | undefined {
+  const normalized = value?.trim().toLowerCase();
+  if (
+    normalized === "railway" ||
+    normalized === "cloud_run" ||
+    normalized === "local"
+  ) {
+    return normalized;
+  }
+  return undefined;
+}
+
 type LoadOptions = {
   /**
    * Base directory to resolve `config/desktop-config.json`.
@@ -60,12 +96,17 @@ type LoadOptions = {
   baseDir?: string;
 };
 
-function readJsonConfigFile(baseDir: string): Partial<DesktopConfig> {
+type ConfigFile = Partial<DesktopConfig> & {
+  provider?: string;
+  providers?: Partial<Record<DesktopProvider, Partial<ProviderUrls>>>;
+};
+
+function readJsonConfigFile(baseDir: string): ConfigFile {
   const configFile = path.resolve(baseDir, "config/desktop-config.json");
   if (!fs.existsSync(configFile)) return {};
   try {
     const raw = fs.readFileSync(configFile, "utf-8");
-    const parsed = JSON.parse(raw) as Partial<DesktopConfig>;
+    const parsed = JSON.parse(raw) as ConfigFile;
     return parsed ?? {};
   } catch {
     return {};
@@ -75,11 +116,20 @@ function readJsonConfigFile(baseDir: string): Partial<DesktopConfig> {
 export function loadDesktopConfig(options: LoadOptions = {}): DesktopConfig {
   const baseDir = options.baseDir || process.cwd();
   const fromFile = readJsonConfigFile(baseDir);
+  const provider =
+    parseProvider(process.env.DESKTOP_PROVIDER) ??
+    parseProvider(fromFile.provider) ??
+    "cloud_run";
+  const profile = {
+    ...PROVIDERS[provider],
+    ...fromFile.providers?.[provider],
+  };
   return {
+    provider,
     BACKEND_WS_BASE:
       process.env.BACKEND_WS_BASE ??
       fromFile.BACKEND_WS_BASE ??
-      DEFAULT_CONFIG.BACKEND_WS_BASE,
+      profile.BACKEND_WS_BASE,
     EGRESS_AUDIO_PATH:
       process.env.EGRESS_AUDIO_PATH ??
       fromFile.EGRESS_AUDIO_PATH ??
@@ -91,7 +141,7 @@ export function loadDesktopConfig(options: LoadOptions = {}): DesktopConfig {
     PYTHON_WS_BASE:
       process.env.PYTHON_WS_BASE ??
       fromFile.PYTHON_WS_BASE ??
-      DEFAULT_CONFIG.PYTHON_WS_BASE,
+      profile.PYTHON_WS_BASE,
     PYTHON_WS_PATH:
       process.env.PYTHON_WS_PATH ??
       fromFile.PYTHON_WS_PATH ??

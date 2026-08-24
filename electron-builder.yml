@@ -26,12 +26,15 @@ mac:
   gatekeeperAssess: false
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
+  notarize: true
+  icon: build/icon.icns
   extendInfo:
     NSMicrophoneUsageDescription: Captura de microfone para análise de reuniões.
     NSScreenCaptureUsageDescription: Captura de áudio da janela do Meet (loopback) para análise da fala do cliente.
 win:
   target:
     - nsis
+  icon: build/icon.ico
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true

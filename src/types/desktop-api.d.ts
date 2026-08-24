@@ -215,9 +215,7 @@ type DesktopApi = {
     name?: string;
   }) => Promise<AuthSessionSnapshot>;
   billingSubscription: () => Promise<SubscriptionSnapshot>;
-  billingUpgrade: (payload: {
-    plan: PlanValue;
-  }) => Promise<SubscriptionSnapshot>;
+  billingOpenPortal: () => Promise<{ ok: boolean }>;
   playbooksList: () => Promise<PlaybookTemplateSummary[]>;
   playbooksCreate: (payload: CreatePlaybookTemplatePayload) => Promise<PlaybookTemplateSummary>;
   playbooksUpdate: (
@@ -233,6 +231,18 @@ type DesktopApi = {
   playbooksRemoveSourcePdf: (payload: {
     id: string;
   }) => Promise<PlaybookTemplateSummary>;
+  specialistsCatalog: () => Promise<{
+    specialists: Array<{
+      key: string;
+      name: string;
+      description: string;
+      source: string;
+    }>;
+  }>;
+  specialistsPreferencesGet: () => Promise<{ specialistKeys: string[] }>;
+  specialistsPreferencesSave: (payload: {
+    specialistKeys: string[];
+  }) => Promise<{ specialistKeys: string[] }>;
   getAcousticCorpusDir: () => Promise<string>;
   saveAcousticCorpus: (payload: {
     manifest: Record<string, unknown>;
@@ -337,6 +347,9 @@ export type SubscriptionSnapshot = {
   memberCount: number;
   pendingInvites: number;
   seatsRemaining: number;
+  entitled?: boolean;
+  cancelAtPeriodEnd?: boolean;
+  currentPeriodEnd?: string | null;
 };
 
 declare global {

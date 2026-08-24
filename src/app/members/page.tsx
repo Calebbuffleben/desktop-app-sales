@@ -8,7 +8,6 @@ import type {
   InvitationSummary,
   MemberSummary,
   MembershipRoleValue,
-  PlanValue,
   SubscriptionSnapshot,
 } from "@/types/desktop-api";
 
@@ -108,15 +107,14 @@ function MembersScreen() {
         <SubscriptionCard
           subscription={subscription}
           isAdmin={isAdmin}
-          onUpgrade={async (plan) => {
+          onOpenPortal={async () => {
             const api = window.desktopApi;
-            if (!api) return;
+            if (!api?.billingOpenPortal) return;
             setBanner(null);
             setError(null);
             try {
-              const updated = await api.billingUpgrade({ plan });
-              setSubscription(updated);
-              setBanner(`Plano atualizado para ${plan} (${updated.maxUsers} assentos).`);
+              await api.billingOpenPortal();
+              setBanner("Portal de cobrança aberto no navegador.");
             } catch (err) {
               setError(err instanceof Error ? err.message : String(err));
             }
@@ -234,22 +232,16 @@ function TabButton({
   );
 }
 
-const PLAN_OPTIONS: Array<{ plan: PlanValue; label: string; seats: number }> = [
-  { plan: "FREE", label: "Free", seats: 3 },
-  { plan: "PRO", label: "Pro", seats: 10 },
-  { plan: "ENTERPRISE", label: "Enterprise", seats: 50 },
-];
-
 function SubscriptionCard({
   subscription,
   isAdmin,
-  onUpgrade,
+  onOpenPortal,
 }: {
   subscription: SubscriptionSnapshot | null;
   isAdmin: boolean;
-  onUpgrade: (plan: PlanValue) => Promise<void>;
+  onOpenPortal: () => Promise<void>;
 }) {
-  const [pendingPlan, setPendingPlan] = useState<PlanValue | null>(null);
+  const [pending, setPending] = useState(false);
 
   const seatLabel = useMemo(() => {
     if (!subscription) return "Carregando…";
@@ -265,6 +257,12 @@ function SubscriptionCard({
   }
 
   const atLimit = subscription.seatsRemaining <= 0;
+  const statusClass =
+    subscription.status === "ACTIVE"
+      ? "text-emerald-300"
+      : subscription.status === "PAST_DUE"
+        ? "text-amber-300"
+        : "text-rose-300";
 
   return (
     <div className="rounded-xl border border-cyan-500/25 bg-gradient-to-br from-zinc-900/90 via-zinc-950/95 to-[#05080f] p-5">
@@ -275,41 +273,39 @@ function SubscriptionCard({
           </p>
           <h2 className="mt-1 text-xl font-semibold text-zinc-100">
             {subscription.plan}{" "}
-            <span className="text-xs font-normal text-zinc-500">
+            <span className={`text-xs font-normal ${statusClass}`}>
               · {subscription.status}
             </span>
           </h2>
           <p className="mt-1 text-xs text-zinc-400">{seatLabel}</p>
+          {subscription.cancelAtPeriodEnd ? (
+            <p className="mt-1 text-xs text-amber-200">Cancela no fim do período.</p>
+          ) : null}
           {atLimit ? (
             <p className="mt-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1 font-mono text-[10px] uppercase tracking-wider text-amber-200">
-              Você atingiu o limite do plano. Faça upgrade para convidar mais membros.
+              Você atingiu o limite do plano.
             </p>
           ) : null}
         </div>
         {isAdmin ? (
-          <div className="flex flex-wrap gap-2">
-            {PLAN_OPTIONS.filter((opt) => opt.plan !== subscription.plan).map((opt) => (
-              <button
-                key={opt.plan}
-                type="button"
-                disabled={pendingPlan !== null}
-                onClick={async () => {
-                  setPendingPlan(opt.plan);
-                  try {
-                    await onUpgrade(opt.plan);
-                  } finally {
-                    setPendingPlan(null);
-                  }
-                }}
-                className="rounded-md border border-cyan-500/40 bg-cyan-600/20 px-3 py-1.5 font-mono text-[11px] uppercase tracking-wider text-cyan-100 transition hover:bg-cyan-500/30 disabled:opacity-50"
-              >
-                {pendingPlan === opt.plan ? "Aplicando…" : `Upgrade → ${opt.label} (${opt.seats})`}
-              </button>
-            ))}
-          </div>
+          <button
+            type="button"
+            disabled={pending}
+            onClick={async () => {
+              setPending(true);
+              try {
+                await onOpenPortal();
+              } finally {
+                setPending(false);
+              }
+            }}
+            className="rounded-md border border-cyan-500/40 bg-cyan-600/20 px-3 py-1.5 font-mono text-[11px] uppercase tracking-wider text-cyan-100 transition hover:bg-cyan-500/30 disabled:opacity-50"
+          >
+            {pending ? "Abrindo…" : "Gerenciar assinatura"}
+          </button>
         ) : (
           <p className="font-mono text-[10px] uppercase tracking-wider text-zinc-500">
-            Apenas admins podem trocar o plano.
+            Apenas admins gerenciam a assinatura.
           </p>
         )}
       </div>

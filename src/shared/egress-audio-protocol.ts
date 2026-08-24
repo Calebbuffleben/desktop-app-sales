@@ -37,6 +37,8 @@ export type EgressAudioParams = {
   sellerRoomId?: string;
   /** PCM framing version: 1 = raw Int16, 2 = envelope with acoustic labels. */
   pcmVersion?: 1 | 2;
+  /** Comma-joined specialist keys for this meeting. */
+  specialists?: string;
 };
 
 function sanitize(value: string): string {
@@ -159,6 +161,14 @@ export function buildEgressAudioWsUrl(params: EgressAudioParams): string {
   }
   if (params.pcmVersion === 2) {
     url.searchParams.set("pcmVersion", "2");
+  }
+  if (params.specialists) {
+    const keys = params.specialists
+      .split(",")
+      .map((item) => sanitize(item))
+      .filter(Boolean)
+      .join(",");
+    if (keys) url.searchParams.set("specialists", keys);
   }
   return url.toString();
 }

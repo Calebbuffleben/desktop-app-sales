@@ -1,6 +1,8 @@
 # Desktop App (Electron + Next.js)
 
-Base desktop client para substituir a `chrome-extension`, mantendo compatibilidade de protocolo com o backend.
+Cliente de produção: captura PCM e fala direto com o python-service via WSS. Seletor de especialistas ao lado dos playbooks.
+
+Protocolo de URL/query em `src/shared/egress-audio-protocol.ts` (nome legado; o destino é o Python `/ws`, não o Nest `/egress-audio`).
 
 ## Fase 2 implementada
 
@@ -155,7 +157,11 @@ pnpm dist
   - `CSC_LINK`, `CSC_KEY_PASSWORD`
   - (opcional para notarization) `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`
 - Auto-update feed genérico:
-  - `AUTO_UPDATE_FEED_URL`
+  - `AUTO_UPDATE_FEED_URL=https://storage.googleapis.com/meet-desktop-releases/desktop/`
+- Downloads estáveis (landing / checkout-success):
+  - `https://storage.googleapis.com/meet-desktop-releases/desktop/MeetDesktop-latest.dmg`
+  - `https://storage.googleapis.com/meet-desktop-releases/desktop/MeetDesktop-latest.exe`
+- Release: tag `v*` dispara `.github/workflows/release.yml` (mac universal + Windows NSIS → GCS).
 
 ## Fase 7 implementada
 
