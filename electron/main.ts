@@ -1080,12 +1080,25 @@ function registerIpcHandlers(): void {
   ipcMain.handle("billing:subscription", async () =>
     authedJson("GET", "/billing/subscription"),
   );
-  ipcMain.handle("billing:upgrade", async (_event, payload?: Record<string, unknown>) => {
-    const plan = ensureStringField(payload?.plan, "plan");
-    return authedJson("POST", "/billing/upgrade", { plan });
+  ipcMain.handle("billing:portal", async () => {
+    const res = (await authedJson("POST", "/billing/portal-session")) as {
+      url?: string;
+    };
+    if (typeof res?.url === "string") await shell.openExternal(res.url);
+    return { ok: true };
   });
 
   ipcMain.handle("playbooks:list", async () => authedJson("GET", "/playbooks"));
+  ipcMain.handle("specialists:catalog", async () => authedJson("GET", "/specialists/catalog"));
+  ipcMain.handle("specialists:preferences-get", async () =>
+    authedJson("GET", "/specialists/preferences"),
+  );
+  ipcMain.handle("specialists:preferences-save", async (_event, payload?: Record<string, unknown>) => {
+    const keys = Array.isArray(payload?.specialistKeys)
+      ? payload.specialistKeys.filter((item) => typeof item === "string")
+      : [];
+    return authedJson("PUT", "/specialists/preferences", { specialistKeys: keys });
+  });
 
   ipcMain.handle("playbooks:create", async (_event, payload?: Record<string, unknown>) => {
     if (!payload || typeof payload !== "object" || Array.isArray(payload)) {

@@ -1,6 +1,6 @@
 {
   "name": "desktop-app",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "description": "Desktop Electron client for Meet realtime feedback",
   "author": "Meet Team",
@@ -22,6 +22,7 @@
     "desktop:start": "NODE_ENV=production sh ./scripts/run-electron.sh",
     "desktop:validate-protocol": "tsx scripts/validate-egress-protocol.ts",
     "desktop:test:egress-protocol": "tsx scripts/test-egress-audio-protocol.ts",
+    "desktop:test:config": "tsx scripts/test-desktop-config.ts",
     "desktop:test:phase7": "tsx scripts/phase7-parity-check.ts",
     "desktop:test:feedback": "node scripts/test-feedback.mjs",
     "desktop:trigger-feedback": "node scripts/test-feedback.mjs --preset spin-implicacao",

@@ -43,6 +43,7 @@ export type StartCaptureInput = {
   sellerRoomId?: string;
   /** Force PCM framing version (default 2 when sellerRoomId is set). */
   pcmVersion?: 1 | 2;
+  specialists?: string[];
 };
 
 export type CaptureStatus = "idle" | "starting" | "capturing";
@@ -184,6 +185,7 @@ registerProcessor("pcm16-framer", Pcm16FramerProcessor);
 export class DesktopAudioCaptureService {
   private status: CaptureStatus = "idle";
   private ws: WebSocket | null = null;
+  private selectedSpecialists: string[] = [];
   private micStream: MediaStream | null = null;
   private loopbackStream: MediaStream | null = null;
   /** macOS ScreenCaptureKit keeps loopback alive while a video track is active. */
@@ -654,6 +656,18 @@ export class DesktopAudioCaptureService {
     });
   }
 
+  setSpecialists(keys: string[]): void {
+    this.selectedSpecialists = keys.filter(Boolean);
+    if (this.baseWsParams) {
+      this.baseWsParams.specialists = this.selectedSpecialists.join(",");
+    }
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.ws.send(
+        JSON.stringify({ type: "set-specialists", specialists: this.selectedSpecialists }),
+      );
+    }
+  }
+
   async start(
     input: StartCaptureInput,
   ): Promise<{ wsUrl: string; resolvedSource: ResolvedSource; platform: CapturePlatform }> {
@@ -673,6 +687,7 @@ export class DesktopAudioCaptureService {
     }
 
     this.debug = Boolean(input.debug);
+    this.selectedSpecialists = input.specialists ?? this.selectedSpecialists;
     const directToPython =
       input.config.PYTHON_DIRECT_ENABLED && Boolean(input.config.PYTHON_WS_BASE);
     if (directToPython) {
@@ -698,6 +713,7 @@ export class DesktopAudioCaptureService {
       sellerRoomId: input.sellerRoomId,
       pcmVersion:
         input.pcmVersion ?? (input.sellerRoomId ? 2 : 1),
+      specialists: this.selectedSpecialists.join(","),
     };
     this.pcmVersion = this.baseWsParams.pcmVersion ?? 1;
     this.frameSeq = 0;

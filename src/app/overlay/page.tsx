@@ -7,6 +7,7 @@ import {
 } from "@/shared/feedback-client";
 import { DirectFeedbackClient } from "@/shared/direct-feedback-client";
 import type { DesktopConfig } from "@/shared/desktop-config";
+import { wsToHttpBase } from "@/shared/egress-audio-protocol";
 import { CoachInsightCard } from "@/shared/coach-insight-card";
 import { useDevFeedbackInject } from "@/shared/use-dev-feedback-inject";
 import { useOverlayFeedbackQueue } from "@/shared/use-overlay-feedback-queue";
@@ -16,9 +17,7 @@ export default function OverlayPage() {
   const { session } = useAuth();
   const { items, now, pushFeedback, dismissFeedback, isVisible } = useOverlayFeedbackQueue();
   const [meetingId, setMeetingId] = useState("abc-defg-hij");
-  const [feedbackHttpBase, setFeedbackHttpBase] = useState(
-    "https://backend-analysis-production-a688.up.railway.app",
-  );
+  const [feedbackHttpBase, setFeedbackHttpBase] = useState("");
   const [desktopConfig, setDesktopConfig] = useState<DesktopConfig | null>(null);
 
   useEffect(() => {
@@ -28,7 +27,7 @@ export default function OverlayPage() {
       setDesktopConfig(state.config ?? null);
       setFeedbackHttpBase(
         state.feedbackHttpBase ||
-          "https://backend-analysis-production-a688.up.railway.app",
+          (state.config ? wsToHttpBase(state.config.BACKEND_WS_BASE) : ""),
       );
     });
     const unsubscribe = window.desktopApi.onFeedbackContextUpdated((payload) => {
@@ -51,7 +50,11 @@ export default function OverlayPage() {
   }, [pushFeedback]);
 
   const effectiveFeedbackBase =
-    session.backendHttpBase || feedbackHttpBase || "http://localhost:3001";
+    session.backendHttpBase ||
+    feedbackHttpBase ||
+    (desktopConfig
+      ? wsToHttpBase(desktopConfig.BACKEND_WS_BASE)
+      : "http://localhost:3001");
 
   const directEnabled = Boolean(
     desktopConfig?.PYTHON_DIRECT_ENABLED && desktopConfig?.PYTHON_WS_BASE,
