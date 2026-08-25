@@ -31,6 +31,7 @@ const {
   session,
   shell,
   systemPreferences,
+  globalShortcut,
 } = electron;
 const { autoUpdater } = updater;
 
@@ -1191,6 +1192,39 @@ function registerIpcHandlers(): void {
     return authedJson("POST", `/seller-rooms/${encodeURIComponent(id)}/end`);
   });
 
+  ipcMain.handle("monitor:live", async () => authedJson("GET", "/monitor/meetings/live"));
+  ipcMain.handle("monitor:meeting", async (_event, payload?: Record<string, unknown>) => {
+    const meetingId = ensureStringField(payload?.meetingId, "meetingId");
+    return authedJson("GET", `/monitor/meetings/${encodeURIComponent(meetingId)}`);
+  });
+  ipcMain.handle("monitor:whisper", async (_event, payload?: Record<string, unknown>) => {
+    const meetingId = ensureStringField(payload?.meetingId, "meetingId");
+    const message = ensureStringField(payload?.message, "message");
+    return authedJson("POST", `/monitor/meetings/${encodeURIComponent(meetingId)}/whisper`, {
+      message,
+    });
+  });
+  ipcMain.handle("monitor:alerts", async (_event, payload?: Record<string, unknown>) => {
+    const since =
+      typeof payload?.since === "string" && payload.since.trim()
+        ? `?since=${encodeURIComponent(payload.since)}`
+        : "";
+    return authedJson("GET", `/monitor/alerts${since}`);
+  });
+  ipcMain.handle("monitor:ack", async (_event, payload?: Record<string, unknown>) => {
+    const alertId = ensureStringField(payload?.alertId, "alertId");
+    return authedJson("PATCH", `/monitor/alerts/${encodeURIComponent(alertId)}/ack`);
+  });
+  ipcMain.handle("monitor:sos", async (_event, payload?: Record<string, unknown>) => {
+    const meetingId = ensureStringField(payload?.meetingId, "meetingId");
+    return authedJson("POST", "/monitor/sos", { meetingId });
+  });
+  ipcMain.handle("desktop:sos-trigger", async () => {
+    const meetingId = appState.meetingId;
+    if (!meetingId) throw new Error("meetingId is required");
+    return authedJson("POST", "/monitor/sos", { meetingId });
+  });
+
   ipcMain.handle("acoustic:get-corpus-dir", () => {
     const dir = path.join(app.getPath("userData"), "acoustic-corpus");
     fs.mkdirSync(dir, { recursive: true });
@@ -1235,7 +1269,7 @@ function registerIpcHandlers(): void {
  * when possible so the UI can surface, e.g., 402 / 403 reasons).
  */
 async function authedJson(
-  method: "GET" | "POST" | "PATCH" | "DELETE",
+  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE",
   path: string,
   body?: unknown,
 ): Promise<unknown> {
@@ -1458,11 +1492,42 @@ app.whenReady().then(async () => {
 
   await createWindows();
 
+  const sosOk = globalShortcut.register("CommandOrControl+Shift+H", () => {
+    const meetingId = appState.meetingId;
+    const notifySosStatus = (payload: { ok: boolean; message: string }) => {
+      if (controlWindow && !controlWindow.isDestroyed()) {
+        controlWindow.webContents.send("desktop:sos-status", payload);
+      }
+    };
+    if (!meetingId) {
+      notifySosStatus({ ok: false, message: "SOS: nenhuma call ativa" });
+      return;
+    }
+    void authedJson("POST", "/monitor/sos", { meetingId })
+      .then(() => {
+        notifySosStatus({ ok: true, message: "SOS enviado ao gestor" });
+      })
+      .catch((err) => {
+        const message = err instanceof Error ? err.message : String(err);
+        addLog(`SOS failed: ${message}`);
+        notifySosStatus({ ok: false, message: `SOS falhou: ${message}` });
+      });
+  });
+  addLog(
+    sosOk
+      ? "SOS shortcut registered (Ctrl/Cmd+Shift+H)"
+      : "SOS shortcut could not be registered",
+  );
+
   app.on("activate", async () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       await createWindows();
     }
   });
+});
+
+app.on("will-quit", () => {
+  globalShortcut.unregisterAll();
 });
 
 app.on("window-all-closed", () => {

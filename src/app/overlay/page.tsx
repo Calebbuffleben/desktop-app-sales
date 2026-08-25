@@ -79,7 +79,25 @@ export default function OverlayPage() {
         },
       });
       void direct.start();
-      return () => direct.stop();
+      // Whisper do gestor em caminho duplo: além do WS Python (Redis →
+      // FeedbackHub), assina o Socket.IO do backend só para manager_whisper.
+      // Ambos os caminhos carregam o mesmo payload.id, então a fila dedupa.
+      // Insights normais ficam de fora (IDs distintos entre caminhos).
+      const whisperFallback = new DesktopFeedbackClient({
+        meetingId,
+        tenantId: session.tenant.id,
+        httpBase: effectiveFeedbackBase,
+        getAccessToken: async () =>
+          (await window.desktopApi?.getAccessToken?.()) ?? null,
+        onFeedback: (payload) => {
+          if (payload.type === "manager_whisper") pushFeedback(payload);
+        },
+      });
+      void whisperFallback.start();
+      return () => {
+        direct.stop();
+        whisperFallback.stop();
+      };
     }
 
     const client = new DesktopFeedbackClient({

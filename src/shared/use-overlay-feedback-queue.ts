@@ -98,7 +98,8 @@ export function useOverlayFeedbackQueue() {
         }
       }
       const severity = resolveSeverity(payload);
-      const ttlMs = ttlForSeverity(severity);
+      const sticky = payload.type === "manager_whisper";
+      const ttlMs = sticky ? 24 * 60 * 60 * 1000 : ttlForSeverity(severity);
 
       setItems((prev) => {
         const next = [
@@ -112,6 +113,10 @@ export function useOverlayFeedbackQueue() {
       });
 
       scheduleAutoDismiss(id, ttlMs);
+      if (sticky) {
+        // Whisper stays until the seller dismisses it.
+        clearItemTimers(id);
+      }
     },
     [clearItemTimers, scheduleAutoDismiss],
   );

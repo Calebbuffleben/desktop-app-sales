@@ -186,6 +186,17 @@ function resolveFooter(metadata: Record<string, unknown>): string | null {
 
 export function resolveCoachInsightContent(payload: FeedbackPayload): CoachInsightContent {
   const metadata = payload.metadata || {};
+
+  if (payload.type === "manager_whisper") {
+    return {
+      source: { name: "Gestor", status: "Whisper" },
+      signalHeader: "Mensagem do gestor",
+      contextLine: payload.message?.trim() || null,
+      recommendedAction: null,
+      footer: null,
+      severity: "critical",
+    };
+  }
   const tips = Array.isArray(payload.tips)
     ? payload.tips
     : Array.isArray(metadata.tips)
