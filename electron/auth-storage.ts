@@ -2,7 +2,7 @@ import path from "node:path";
 import fs from "node:fs";
 import { safeStorage, app } from "electron";
 
-export type MembershipRoleValue = "OWNER" | "ADMIN" | "MEMBER";
+export type MembershipRoleValue = "OWNER" | "ADMIN" | "MANAGER" | "MEMBER";
 
 export interface PersistedAuthSession {
   accessToken: string;

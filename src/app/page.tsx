@@ -10,11 +10,16 @@ import {
   type ReactNode,
 } from "react";
 import {
-  DesktopAudioCaptureService,
   type AudioMeter,
   type AudioSourceMode,
   type AudioWsState,
 } from "@/shared/audio-capture-service";
+import {
+  bindCaptureUi,
+  getCaptureUiStatus,
+  hostCaptureService,
+  remoteCaptureService,
+} from "@/shared/capture-runtime";
 import type { DesktopConfig } from "@/shared/desktop-config";
 import type { CaptureReadiness, DisplaySource } from "@/types/desktop-api";
 import {
@@ -30,6 +35,7 @@ import { SellerAudioFingerprintSync } from "@/shared/seller-audio-fingerprint-sy
 import { SellerRoomsPanel } from "@/shared/seller-rooms-panel";
 import type { AcousticClass } from "@/shared/fingerprint-types";
 import type { SellerRoomSummary } from "@/types/desktop-api";
+import { canAccessManagerFloor, isAdminRole } from "@/shared/manager-access";
 import { SessionGate } from "@/shared/session-gate";
 import { useAuth } from "@/shared/auth-context";
 
@@ -71,15 +77,6 @@ const FALLBACK_UPDATE_STATE = {
 const IDLE_AUDIO_WS_STATE: AudioWsState = {
   status: "idle",
   reconnectAttempt: 0,
-};
-
-const EMPTY_AUDIO_METER: AudioMeter = {
-  micRms: 0,
-  loopbackRms: 0,
-  mixedRms: 0,
-  bytesSent: 0,
-  framesSent: 0,
-  lastFrameTs: 0,
 };
 
 function mergeAudioWsStates(host: AudioWsState, remote: AudioWsState): AudioWsState {
@@ -186,10 +183,12 @@ export default function Home() {
 
 function HomeAuthenticated() {
   const { session, logout } = useAuth();
-  const isAdmin = session.membership?.role === "OWNER" || session.membership?.role === "ADMIN";
+  const isAdmin = isAdminRole(session.membership?.role);
+  const canManageFloor = canAccessManagerFloor(session.membership?.role);
   const [bridgeReady, setBridgeReady] = useState(false);
   const [isElectronRuntime, setIsElectronRuntime] = useState(false);
-  const [captureStatus, setCaptureStatus] = useState<CaptureStatus>("idle");
+  const [captureStatus, setCaptureStatus] =
+    useState<CaptureStatus>(getCaptureUiStatus);
   const captureStartInFlightRef = useRef(false);
   const [clickThrough, setClickThrough] = useState(false);
   const [config, setConfig] = useState<DesktopConfig | null>(null);
@@ -208,10 +207,12 @@ function HomeAuthenticated() {
   const [anchorMode, setAnchorMode] = useState<"fixed" | "meet-window">("fixed");
   const [debugLogs, setDebugLogs] = useState(false);
   const [forcePolling, setForcePolling] = useState(false);
-  const [hostAudioWsState, setHostAudioWsState] =
-    useState<AudioWsState>(IDLE_AUDIO_WS_STATE);
-  const [remoteAudioWsState, setRemoteAudioWsState] =
-    useState<AudioWsState>(IDLE_AUDIO_WS_STATE);
+  const [hostAudioWsState, setHostAudioWsState] = useState<AudioWsState>(
+    () => hostCaptureService.getWsState(),
+  );
+  const [remoteAudioWsState, setRemoteAudioWsState] = useState<AudioWsState>(
+    () => remoteCaptureService.getWsState(),
+  );
   const [feedbackState, setFeedbackState] = useState<FeedbackConnectionState>({
     socketStatus: "idle",
     pollingActive: false,
@@ -234,9 +235,12 @@ function HomeAuthenticated() {
   const [displaySources, setDisplaySources] = useState<DisplaySource[]>([]);
   const [selectedSourceId, setSelectedSourceId] = useState<string>("");
   const [loadingSources, setLoadingSources] = useState(false);
-  const [hostAudioMeter, setHostAudioMeter] = useState<AudioMeter>(EMPTY_AUDIO_METER);
-  const [remoteAudioMeter, setRemoteAudioMeter] =
-    useState<AudioMeter>(EMPTY_AUDIO_METER);
+  const [hostAudioMeter, setHostAudioMeter] = useState<AudioMeter>(
+    () => hostCaptureService.getMeter(),
+  );
+  const [remoteAudioMeter, setRemoteAudioMeter] = useState<AudioMeter>(
+    () => remoteCaptureService.getMeter(),
+  );
   const [corpusScenario, setCorpusScenario] = useState("self_roundtrip");
   const [corpusDir, setCorpusDir] = useState("");
   const [corpusRecording, setCorpusRecording] = useState(false);
@@ -247,6 +251,7 @@ function HomeAuthenticated() {
   const [sellerRoomName, setSellerRoomName] = useState("Sala de vendedores");
   const [inviteeEmail, setInviteeEmail] = useState("");
   const [sellerRoomStatus, setSellerRoomStatus] = useState("");
+  const [sosStatus, setSosStatus] = useState("");
   const [acousticClass, setAcousticClass] = useState<AcousticClass>("unknown");
   const [correlationConfidence, setCorrelationConfidence] = useState(0);
   const [syncJoined, setSyncJoined] = useState(false);
@@ -356,31 +361,25 @@ function HomeAuthenticated() {
     [appendLog],
   );
 
-  const [hostCaptureService] = useState(
-    () =>
-      new DesktopAudioCaptureService(
-        (message) => appendLog(`[host] ${message}`),
-        (state) => setHostAudioWsState(state),
-        (meter) => setHostAudioMeter(meter),
-      ),
-  );
-  const [remoteCaptureService] = useState(
-    () =>
-      new DesktopAudioCaptureService(
-        (message) => appendLog(`[remote] ${message}`),
-        (state) => setRemoteAudioWsState(state),
-        (meter) => setRemoteAudioMeter(meter),
-        (payload) => {
-          const api = window.desktopApi;
-          if (!api) return;
-          void api.publishDirectFeedback(payload).catch((error) => {
-            appendLog(
-              `[remote] direct feedback IPC failed: ${error instanceof Error ? error.message : String(error)}`,
-            );
-          });
-        },
-      ),
-  );
+  useEffect(() => {
+    return bindCaptureUi({
+      hostLog: (message) => appendLog(`[host] ${message}`),
+      hostState: (state) => setHostAudioWsState(state),
+      hostMeter: (meter) => setHostAudioMeter(meter),
+      remoteLog: (message) => appendLog(`[remote] ${message}`),
+      remoteState: (state) => setRemoteAudioWsState(state),
+      remoteMeter: (meter) => setRemoteAudioMeter(meter),
+      remoteFeedback: (payload) => {
+        const api = window.desktopApi;
+        if (!api) return;
+        void api.publishDirectFeedback(payload).catch((error) => {
+          appendLog(
+            `[remote] direct feedback IPC failed: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        });
+      },
+    });
+  }, [appendLog]);
 
   const syncCorpusTaps = useCallback(
     (enabled: boolean) => {
@@ -476,7 +475,7 @@ function HomeAuthenticated() {
     void desktopApi
       .getState()
       .then((state) => {
-        setCaptureStatus(state.captureStatus);
+        setCaptureStatus(getCaptureUiStatus());
         setClickThrough(state.clickThrough);
         setConfig(state.config);
         setLogs(state.logs);
@@ -520,6 +519,14 @@ function HomeAuthenticated() {
             setSelectedSourceId(payload?.sourceId || "");
           })
         : () => {};
+    // Confirmação visual do SOS disparado pelo atalho global (Ctrl/Cmd+Shift+H).
+    const unsubscribeSosStatus =
+      typeof desktopApi.onSosStatus === "function"
+        ? desktopApi.onSosStatus((payload) => {
+            if (!payload?.message) return;
+            setSosStatus(payload.message);
+          })
+        : () => {};
     if (typeof desktopApi.getPermissionPolicy === "function") {
       void desktopApi
         .getPermissionPolicy()
@@ -542,15 +549,9 @@ function HomeAuthenticated() {
       unsubscribeUpdate();
       unsubscribeLogEntry();
       unsubscribeSelectedSource();
+      unsubscribeSosStatus();
     };
   }, [bridgeReady, reportError, session.backendHttpBase]);
-
-  useEffect(() => {
-    return () => {
-      void hostCaptureService.stop();
-      void remoteCaptureService.stop();
-    };
-  }, [hostCaptureService, remoteCaptureService]);
 
   const effectiveMeetingId = resolveEffectiveMeetingId(meetUrl, meetingId);
 
@@ -600,7 +601,7 @@ function HomeAuthenticated() {
 
   async function handleStartCapture(): Promise<void> {
     if (!window.desktopApi || !config) return;
-    if (captureStartInFlightRef.current || captureStatus !== "idle") return;
+    if (captureStartInFlightRef.current || getCaptureUiStatus() !== "idle") return;
     if (!session.isAuthenticated || !session.tenant) {
       reportError(
         "start-capture",
@@ -1150,6 +1151,14 @@ function HomeAuthenticated() {
                         Playbooks
                       </Link>
                     ) : null}
+                    {canManageFloor ? (
+                      <Link
+                        href="/live-floor"
+                        className="rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1 font-mono text-[10px] uppercase tracking-wider text-amber-100 hover:bg-amber-500/20"
+                      >
+                        Live Floor
+                      </Link>
+                    ) : null}
                     <a
                       href="/members"
                       className="rounded-md border border-cyan-500/40 bg-cyan-500/10 px-2 py-1 font-mono text-[10px] uppercase tracking-wider text-cyan-100 hover:bg-cyan-500/20"
@@ -1450,9 +1459,33 @@ function HomeAuthenticated() {
               >
                 Stop capture
               </button>
+              <button
+                className={btnDanger}
+                onClick={async () => {
+                  const api = window.desktopApi;
+                  const id = resolveEffectiveMeetingId(meetUrl, meetingId);
+                  if (!api?.monitorSos || !id) return;
+                  try {
+                    await api.monitorSos({ meetingId: id });
+                    setSosStatus("SOS enviado ao gestor");
+                  } catch (err) {
+                    setSosStatus(err instanceof Error ? err.message : String(err));
+                  }
+                }}
+                disabled={!isBridgeAvailable || captureStatus !== "capturing"}
+                type="button"
+                title="Atalho silencioso: Ctrl/Cmd+Shift+H"
+              >
+                SOS
+              </button>
               <button className={btn} onClick={handleToggleClickThrough} disabled={!isBridgeAvailable} type="button">
                 Overlay click-through: {clickThrough ? "on" : "off"}
               </button>
+              {sosStatus ? (
+                <span className="font-mono text-[10px] uppercase tracking-wider text-amber-200">
+                  {sosStatus}
+                </span>
+              ) : null}
             </div>
             <SellerRoomsPanel
               rooms={sellerRooms}

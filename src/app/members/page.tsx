@@ -363,6 +363,7 @@ function MembersTable({
                       className="rounded-md border border-zinc-700/80 bg-zinc-950/80 px-2 py-1 font-mono text-[11px] text-zinc-200"
                     >
                       <option value="ADMIN">ADMIN</option>
+                      <option value="MANAGER">GESTOR</option>
                       <option value="MEMBER">MEMBER</option>
                     </select>
                   ) : (
@@ -459,6 +460,7 @@ function InvitesPanel({
                 disabled={atLimit}
               >
                 <option value="MEMBER">MEMBER</option>
+                <option value="MANAGER">GESTOR</option>
                 <option value="ADMIN">ADMIN</option>
               </select>
             </label>

@@ -168,6 +168,10 @@ type DesktopApi = {
   onSelectedSourceUpdated: (
     handler: (payload: { sourceId: string }) => void,
   ) => () => void;
+  /** Resultado do SOS disparado pelo atalho global (Ctrl/Cmd+Shift+H). */
+  onSosStatus: (
+    handler: (payload: { ok: boolean; message: string }) => void,
+  ) => () => void;
   authLogin: (payload: {
     email: string;
     password: string;
@@ -214,6 +218,15 @@ type DesktopApi = {
     password: string;
     name?: string;
   }) => Promise<AuthSessionSnapshot>;
+  monitorLiveMeetings: () => Promise<MonitorLiveMeeting[]>;
+  monitorMeeting: (payload: { meetingId: string }) => Promise<MonitorMeetingDetail>;
+  monitorWhisper: (payload: {
+    meetingId: string;
+    message: string;
+  }) => Promise<{ id: string; meetingId: string }>;
+  monitorAlerts: (payload?: { since?: string }) => Promise<MonitorAlert[]>;
+  monitorAckAlert: (payload: { alertId: string }) => Promise<MonitorAlert>;
+  monitorSos: (payload: { meetingId: string }) => Promise<MonitorAlert>;
   billingSubscription: () => Promise<SubscriptionSnapshot>;
   billingOpenPortal: () => Promise<{ ok: boolean }>;
   playbooksList: () => Promise<PlaybookTemplateSummary[]>;
@@ -295,7 +308,63 @@ export type SellerRoomSummary = {
   }>;
 };
 
-export type MembershipRoleValue = "OWNER" | "ADMIN" | "MEMBER";
+export type MembershipRoleValue = "OWNER" | "ADMIN" | "MANAGER" | "MEMBER";
+
+export type MonitorHealthBand = "green" | "yellow" | "red";
+
+export type MonitorSnapshot = {
+  meetingId: string;
+  tenantId: string;
+  healthScore: number;
+  healthBand: MonitorHealthBand;
+  healthFactors: string[];
+  talkListen: {
+    hostSpeechMs: number;
+    customerSpeechMs: number;
+    hostRatio: number;
+    /** Host ratio over the last ~2min moving window. */
+    hostRatioRecent: number;
+    hostMonologueMs: number;
+  };
+  objections: { active: string[]; resolved: string[] };
+  playbookAdherence: {
+    percent: number;
+    faseSpin: string;
+    steps: Array<{ id: string; label: string; done: boolean }>;
+  };
+  sentiment: { current: string; trend: string };
+  alerts: Array<{ kind: "red" | "yellow" | "sos"; message: string }>;
+  tsMs: number;
+};
+
+export type MonitorLiveMeeting = {
+  meetingId: string;
+  status: string;
+  startedAt: string;
+  lastSeenAt: string;
+  durationMs: number;
+  activeConnections: number;
+  rep: { id: string; name: string | null; email: string } | null;
+  snapshot: MonitorSnapshot | null;
+};
+
+export type MonitorMeetingDetail = {
+  session: Omit<MonitorLiveMeeting, "snapshot">;
+  snapshot: MonitorSnapshot | null;
+  feedbacks: Array<Record<string, unknown>>;
+  alerts: MonitorAlert[];
+};
+
+export type MonitorAlert = {
+  id: string;
+  tenantId: string;
+  meetingId: string;
+  kind: "red" | "yellow" | "sos";
+  message: string;
+  metadata?: Record<string, unknown> | null;
+  acknowledgedAt?: string | null;
+  createdAt: string;
+};
 export type PlanValue = "FREE" | "PRO" | "ENTERPRISE";
 
 export type AuthSessionSnapshot = {

@@ -30,8 +30,9 @@ export function CoachInsightCard({
   now: number;
   onDismiss: (id: string) => void;
 }) {
+  const isWhisper = item.payload.type === "manager_whisper";
   const { severity } = resolveCoachInsightContent(item.payload);
-  const sev = SEVERITY[severity];
+  const sev = isWhisper ? { color: "#7c3aed" } : SEVERITY[severity];
   const tip = item.payload.message?.trim() || "feedback sem mensagem";
 
   const [offset, setOffset] = useState({ x: 0, y: 0 });
@@ -119,6 +120,11 @@ export function CoachInsightCard({
           </span>
 
           <p className="coach-tip min-w-0 flex-1 text-[16px] font-medium leading-[1.45] tracking-[-0.01em] text-zinc-900">
+            {isWhisper ? (
+              <span className="mb-1 block font-mono text-[10px] uppercase tracking-[0.2em] text-violet-600">
+                Gestor
+              </span>
+            ) : null}
             {tip}
           </p>
 
@@ -141,7 +147,7 @@ export function CoachInsightCard({
         </div>
 
         <div className="flex items-center justify-end gap-1 px-3.5 pb-2 pt-1">
-          {!item.exiting ? (
+          {!item.exiting && !isWhisper ? (
             <span
               className="text-[12px] font-medium tabular-nums text-zinc-400"
               aria-label={`Fecha em ${remainingSec} segundos`}

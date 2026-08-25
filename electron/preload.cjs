@@ -54,6 +54,13 @@ const ALLOWED_INVOKE_CHANNELS = new Set([
   "seller-rooms:join",
   "seller-rooms:leave",
   "seller-rooms:end",
+  "monitor:live",
+  "monitor:meeting",
+  "monitor:whisper",
+  "monitor:alerts",
+  "monitor:ack",
+  "monitor:sos",
+  "desktop:sos-trigger",
 ]);
 
 const ALLOWED_LISTEN_CHANNELS = new Set([
@@ -64,6 +71,7 @@ const ALLOWED_LISTEN_CHANNELS = new Set([
   "desktop:logs",
   "desktop:log-entry",
   "desktop:selected-source-updated",
+  "desktop:sos-status",
   "auth:session-updated",
 ]);
 
@@ -130,6 +138,7 @@ contextBridge.exposeInMainWorld(
     onLogEntry: (handler) => onStrict("desktop:log-entry", handler),
     onSelectedSourceUpdated: (handler) =>
       onStrict("desktop:selected-source-updated", handler),
+    onSosStatus: (handler) => onStrict("desktop:sos-status", handler),
     authLogin: (payload) => invokeStrict("auth:login", payload),
     authLogout: () => invokeStrict("auth:logout"),
     authRefresh: () => invokeStrict("auth:refresh"),
@@ -176,5 +185,17 @@ contextBridge.exposeInMainWorld(
       invokeStrict("seller-rooms:leave", ensureObjectOrUndefined(payload)),
     sellerRoomsEnd: (payload) =>
       invokeStrict("seller-rooms:end", ensureObjectOrUndefined(payload)),
+    monitorLiveMeetings: () => invokeStrict("monitor:live"),
+    monitorMeeting: (payload) =>
+      invokeStrict("monitor:meeting", ensureObjectOrUndefined(payload)),
+    monitorWhisper: (payload) =>
+      invokeStrict("monitor:whisper", ensureObjectOrUndefined(payload)),
+    monitorAlerts: (payload) => invokeStrict("monitor:alerts", payload),
+    monitorAckAlert: (payload) =>
+      invokeStrict("monitor:ack", ensureObjectOrUndefined(payload)),
+    monitorSos: (payload) =>
+      invokeStrict("monitor:sos", ensureObjectOrUndefined(payload)),
+    triggerSos: (payload) =>
+      invokeStrict("desktop:sos-trigger", ensureObjectOrUndefined(payload)),
   }),
 );

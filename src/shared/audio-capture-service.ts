@@ -234,6 +234,8 @@ export class DesktopAudioCaptureService {
     tenantId: string;
     sellerRoomId?: string;
     pcmVersion?: 1 | 2;
+    /** Comma-joined specialist keys for this meeting (query param). */
+    specialists?: string;
   } | null = null;
   private getAccessToken: (() => Promise<string | null>) | null = null;
   private onPcmFrame: ((pcm: Int16Array) => void) | null = null;
@@ -273,6 +275,14 @@ export class DesktopAudioCaptureService {
 
   getStatus(): CaptureStatus {
     return this.status;
+  }
+
+  getWsState(): AudioWsState {
+    return this.wsState;
+  }
+
+  getMeter(): AudioMeter {
+    return this.meter;
   }
 
   setOnPcmFrame(callback: ((pcm: Int16Array) => void) | null): void {
